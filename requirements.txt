@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+faster-whisper
+piper-tts
+edge-tts
+aiohttp
+numpy
+fpdf2
+huggingface-hub

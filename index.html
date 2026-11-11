@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>J.A.R.V.I.S. Studio v4.0</title>
+  <style>
+    :root {
+      --bg: #070b14; --panel: #0f172a; --card: #1e293b; --border: #334155;
+      --accent: #00d2ff; --rec: #ef4444; --speak: #10b981; --text: #f1f5f9; --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
+    body { background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+
+    /* Overlay Inicial */
+    #bootOverlay {
+      position: fixed; inset: 0; background: rgba(7, 11, 20, 0.97); z-index: 200;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px; text-align: center;
+    }
+    .boot-btn {
+      padding: 18px 38px; font-size: 1.1rem; font-weight: 700; letter-spacing: 1.5px;
+      color: #000; background: var(--accent); border: none; border-radius: 50px;
+      cursor: pointer; box-shadow: 0 0 30px rgba(0, 210, 255, 0.4); transition: 0.2s;
+    }
+    .boot-btn:active { transform: scale(0.96); }
+
+    /* Topo Responsivo */
+    header {
+      padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center; gap: 8px; z-index: 30;
+    }
+    .header-left, .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .icon-btn {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      padding: 7px 11px; border-radius: 8px; cursor: pointer; font-size: 0.82rem; font-weight: 600;
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .icon-btn.active { border-color: var(--accent); color: var(--accent); }
+    select.ctrl-select {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      padding: 6px 9px; border-radius: 8px; font-size: 0.8rem;
+    }
+    .hw-badge {
+      font-family: monospace; font-size: 0.72rem; color: var(--muted);
+      background: #050811; padding: 4px 8px; border-radius: 6px; border: 1px solid #1e293b;
+    }
+
+    /* Layout Principal: Sidebar (Esquerda) + Chat (Centro) + Artefactos Claude (Direita) */
+    .workspace { flex: 1; display: flex; overflow: hidden; position: relative; }
+
+    /* 1. Barra Lateral de Histórico de Chats */
+    #chatSidebar {
+      width: 270px; background: var(--panel); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; padding: 12px; gap: 10px; z-index: 40;
+      transition: transform 0.25s ease;
+    }
+    .new-chat-btn {
+      width: 100%; padding: 10px; border-radius: 8px; background: var(--accent); color: #000;
+      font-weight: 700; border: none; cursor: pointer; font-size: 0.88rem;
+    }
+    #sessionList { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+    .session-item {
+      padding: 9px 10px; border-radius: 8px; background: rgba(30, 41, 59, 0.5);
+      border: 1px solid transparent; cursor: pointer; display: flex; justify-content: space-between;
+      align-items: center; font-size: 0.83rem; color: var(--text);
+    }
+    .session-item.active { border-color: var(--accent); background: rgba(0, 210, 255, 0.1); }
+    .session-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 195px; }
+    .del-chat-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.9rem; padding: 2px 5px; }
+    .del-chat-btn:hover { color: var(--rec); }
+
+    /* 2. Área Central de Conversa */
+    .chat-column { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+    #chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; max-width: 860px; width: 100%; margin: 0 auto; }
+    .msg { padding: 12px 16px; border-radius: 14px; max-width: 88%; line-height: 1.5; font-size: 0.95rem; word-wrap: break-word; }
+    .user { background: #2563eb; color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; white-space: pre-wrap; }
+    .ai { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); align-self: flex-start; width: 100%; max-width: 88%; }
+    .prose-text { white-space: pre-wrap; margin-bottom: 6px; }
+
+    /* Cartão Compacto de Artefacto (Estilo Claude) dentro do Chat */
+    .claude-artifact-pill {
+      margin-top: 10px; padding: 11px 14px; border-radius: 10px;
+      background: #0b1325; border: 1px solid var(--accent);
+      display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer;
+      transition: 0.15s;
+    }
+    .claude-artifact-pill:hover { background: rgba(0, 210, 255, 0.12); }
+    .pill-info { display: flex; flex-direction: column; gap: 2px; }
+    .pill-title { font-weight: 700; font-size: 0.88rem; color: var(--accent); }
+    .pill-sub { font-size: 0.74rem; color: var(--muted); }
+    .pill-btn { background: var(--accent); color: #000; font-weight: 700; padding: 6px 12px; border-radius: 6px; font-size: 0.78rem; border: none; cursor: pointer; }
+
+    .artifact-card { background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; border-radius: 10px; padding: 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .artifact-btn { background: #10b981; color: #000; font-weight: 700; text-decoration: none; padding: 7px 14px; border-radius: 6px; font-size: 0.82rem; }
+    .generated-img { max-width: 100%; border-radius: 10px; border: 1px solid var(--border); margin-top: 8px; display: block; }
+
+    /* 3. Painel de Artefactos Estilo Claude (Direita / Split-Screen) */
+    #artifactPanel {
+      width: 48%; max-width: 680px; background: #0b1120; border-left: 1px solid var(--border);
+      display: none; flex-direction: column; z-index: 45;
+    }
+    #artifactPanel.open { display: flex; }
+    .art-header {
+      padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .art-tabs { display: flex; gap: 6px; }
+    .art-tab {
+      padding: 5px 11px; border-radius: 6px; background: var(--card); color: var(--muted);
+      border: 1px solid var(--border); cursor: pointer; font-size: 0.78rem; font-weight: 600;
+    }
+    .art-tab.active { background: var(--accent); color: #000; border-color: var(--accent); }
+    .art-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+    #artCodeView {
+      flex: 1; overflow: auto; padding: 14px; font-family: 'Fira Code', monospace;
+      font-size: 0.84rem; line-height: 1.45; color: #bae6fd; white-space: pre; margin: 0;
+    }
+    #artPreviewFrame { flex: 1; width: 100%; border: none; background: #fff; display: none; }
+    #artConsoleView {
+      flex: 1; overflow: auto; padding: 14px; font-family: monospace; font-size: 0.84rem;
+      background: #04070e; color: #34d399; white-space: pre-wrap; display: none;
+    }
+
+    /* Gaveta de Memória .MD e Definições de Voz */
+    #memoryModal {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 90;
+      display: none; align-items: center; justify-content: center; padding: 16px;
+    }
+    #memoryModal.open { display: flex; }
+    .modal-box {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+      width: 100%; max-width: 620px; height: 82dvh; display: flex; flex-direction: column; padding: 16px; gap: 12px;
+    }
+    #memoryEditor {
+      flex: 1; width: 100%; background: #050811; color: #a7f3d0; border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px; font-family: monospace; font-size: 0.83rem; resize: none;
+    }
+
+    /* Rodapé Mobile-Friendly */
+    footer {
+      padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 30;
+    }
+    .hud-row { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 860px; }
+    #orb {
+      width: 48px; height: 48px; border-radius: 50%; border: 2px solid var(--accent);
+      display: flex; align-items: center; justify-content: center; font-size: 20px;
+      box-shadow: 0 0 14px rgba(0, 210, 255, 0.3); cursor: pointer; flex-shrink: 0; user-select: none;
+    }
+    #orb.listening { border-color: var(--accent); }
+    #orb.recording { border-color: var(--rec); background: rgba(239, 68, 68, 0.25); box-shadow: 0 0 22px var(--rec); transform: scale(1.06); }
+    #orb.speaking { border-color: var(--speak); background: rgba(16, 185, 129, 0.25); box-shadow: 0 0 22px var(--speak); }
+
+    .meter-wrap { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 80px; }
+    #status { font-size: 0.78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .vol-bar-bg { width: 100%; height: 6px; background: #1e293b; border-radius: 4px; overflow: hidden; position: relative; }
+    #volBar { height: 100%; width: 0%; background: var(--accent); }
+    #threshLine { position: absolute; top: 0; bottom: 0; width: 2px; background: #f59e0b; left: 12%; }
+
+    .input-group { display: flex; gap: 6px; flex: 1.4; }
+    #textInput {
+      flex: 1; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: #050811; color: #fff; font-size: 0.92rem; min-width: 0;
+    }
+    .send-btn {
+      background: var(--accent); color: #000; border: none; border-radius: 10px;
+      padding: 0 14px; font-weight: 700; cursor: pointer; font-size: 0.9rem;
+    }
+
+    /* Responsividade 100% Mobile (< 860px) */
+    @media (max-width: 860px) {
+      #chatSidebar {
+        position: fixed; top: 0; bottom: 0; left: 0; width: 80%; max-width: 300px;
+        transform: translateX(-100%); box-shadow: 10px 0 30px rgba(0,0,0,0.7);
+      }
+      #chatSidebar.mobile-open { transform: translateX(0); }
+      #artifactPanel {
+        position: fixed; inset: 0; width: 100%; max-width: 100%; z-index: 80;
+      }
+      .hw-badge { display: none; }
+      .hud-row { flex-wrap: wrap; }
+      .input-group { width: 100%; flex: auto; }
+      .msg, .ai { max-width: 95%; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="bootOverlay">
+    <div style="font-size: 2rem; font-weight: 800; color: var(--accent); letter-spacing: 3px;">J.A.R.V.I.S. STUDIO</div>
+    <p style="color: var(--muted); max-width: 460px; line-height: 1.5; font-size: 0.95rem;">
+      Voz Neural Natural PT-PT + <strong>Histórico de Conversas</strong> + <strong>Artefactos estilo Claude</strong> (Código, Preview & Execução) + <strong>100% Mobile Friendly</strong>.
+    </p>
+    <button class="boot-btn" onclick="bootJarvis()">⚡ INICIAR J.A.R.V.I.S.</button>
+  </div>
+
+  <header>
+    <div class="header-left">
+      <button class="icon-btn" onclick="toggleSidebar()" title="Histórico de Conversas">☰ Chats</button>
+      <strong style="color:var(--accent);font-size:0.95rem;">J.A.R.V.I.S.</strong>
+      <span id="latencyBadge" class="hw-badge">STT: -- | LLM: -- | TTS: --</span>
+      <span id="hwBadge" class="hw-badge">RTX 3060 Ti</span>
+    </div>
+    <div class="header-right">
+      <select id="voiceSelect" class="ctrl-select" title="Escolher Voz" onchange="localStorage.setItem('jarvis_voice', this.value)">
+        <option value="duarte" selected>🗣️ Voz: Duarte (Natural PT-PT)</option>
+        <option value="raquel">🗣️ Voz: Raquel (Friday PT-PT)</option>
+        <option value="piper">⚡ Voz: Piper (Offline)</option>
+      </select>
+      <button class="icon-btn" id="micModeBtn" onclick="toggleMicMode()" title="Alternar entre Mãos-Livres Automático e Toque para Falar">🎙️ Auto</button>
+      <button class="icon-btn" onclick="openMemoryModal()">🧠 .MD</button>
+      <button class="icon-btn" id="artToggleBtn" onclick="toggleArtifactPanel()" style="display:none;">🧩 Artefacto</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- 1. Sidebar Esquerda: Histórico de Conversas -->
+    <aside id="chatSidebar">
+      <div style="display:flex;gap:8px;">
+        <button class="new-chat-btn" onclick="startNewChatSession()">+ Nova Conversa</button>
+        <button class="icon-btn" onclick="toggleSidebar()" style="display:none;" id="closeSidebarMobile">✕</button>
+      </div>
+      <div id="sessionList"></div>
+    </aside>
+
+    <!-- 2. Coluna Central: Chat -->
+    <main class="chat-column">
+      <div id="chat"></div>
+    </main>
+
+    <!-- 3. Painel Direito: Artefactos Estilo Claude -->
+    <section id="artifactPanel">
+      <div class="art-header">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <strong id="artTitle" style="color:var(--accent);font-size:0.88rem;">🧩 Artefacto</strong>
+          <div class="art-tabs">
+            <button class="art-tab active" id="tabCodeBtn" onclick="switchArtTab('code')">💻 Código</button>
+            <button class="art-tab" id="tabPreviewBtn" onclick="switchArtTab('preview')">👁️ Preview</button>
+            <button class="art-tab" id="tabRunBtn" onclick="runCurrentArtifact()">▶️ Executar</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="icon-btn" id="continueArtBtn" onclick="continueCutArtifact()" style="display:none;background:#f59e0b;color:#000;border:none;">⏩ Continuar Código</button>
+          <button class="icon-btn" onclick="copyArtifactCode()">📋 Copiar</button>
+          <button class="icon-btn" onclick="downloadArtifactCode()">💾 Guardar</button>
+          <button class="icon-btn" onclick="closeArtifactPanel()" style="color:var(--rec);">✕</button>
+        </div>
+      </div>
+      <div class="art-body">
+        <pre id="artCodeView"><code id="artCodeContent"></code></pre>
+        <iframe id="artPreviewFrame" sandbox="allow-scripts allow-modals allow-same-origin"></iframe>
+        <div id="artConsoleView"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Modal de Memória .MD e Sensibilidade -->
+  <div id="memoryModal">
+    <div class="modal-box">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong style="color:var(--accent);">🧠 Memória Persistente (core_memory.md) & Calibração</strong>
+        <button class="icon-btn" onclick="closeMemoryModal()">✕ Fechar</button>
+      </div>
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:0.82rem;background:var(--card);padding:10px;border-radius:8px;">
+        <label>Sensibilidade Microfone:
+          <input type="range" id="threshSlider" min="4" max="40" value="12" style="vertical-align:middle;" oninput="updateThreshold(this.value)">
+        </label>
+        <label>Velocidade da Voz:
+          <select id="speedSelect" class="ctrl-select" onchange="audioPlayer.playbackRate = Number(this.value)">
+            <option value="1.0" selected>1.0x (Mais Natural)</option>
+            <option value="1.08">1.08x</option>
+            <option value="1.15">1.15x</option>
+          </select>
+        </label>
+      </div>
+      <textarea id="memoryEditor" spellcheck="false"></textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="display:flex;gap:6px;flex:1;">
+          <input type="text" id="wrongWord" placeholder="Ouvido errado (ex: jarbas)" style="flex:1;padding:7px;border-radius:6px;background:#050811;color:#fff;border:1px solid var(--border);font-size:0.8rem;">
+          <input type="text" id="rightWord" placeholder="Correto (ex: Jarvis)" style="flex:1;padding:7px;border-radius:6px;background:#050811;color:#fff;border:1px solid var(--border);font-size:0.8rem;">
+          <button class="icon-btn" onclick="addVocabCorrection()">+ Ensinar</button>
+        </div>
+        <button class="icon-btn" onclick="saveManualMemory()" style="background:#10b981;color:#000;border:none;">💾 Guardar .MD</button>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="hud-row">
+      <div id="orb" onclick="handleOrbClick()" title="Toca para falar / interromper">🎙️</div>
+      <div class="meter-wrap">
+        <div id="status">Pronto</div>
+        <div class="vol-bar-bg">
+          <div id="volBar"></div>
+          <div id="threshLine"></div>
+        </div>
+      </div>
+      <div class="input-group">
+        <input type="text" id="textInput" placeholder="Escreve ou fala com o Jarvis..." onkeydown="if(event.key==='Enter') sendManualText()">
+        <button class="send-btn" onclick="sendManualText()">➤</button>
+      </div>
+    </div>
+  </footer>
+
+<script>
+const LLM_URL = "/llm";
+const chat = document.getElementById("chat");
+const statusEl = document.getElementById("status");
+const orb = document.getElementById("orb");
+const volBar = document.getElementById("volBar");
+const threshLine = document.getElementById("threshLine");
+const voiceSelect = document.getElementById("voiceSelect");
+const speedSelect = document.getElementById("speedSelect");
+const memoryEditor = document.getElementById("memoryEditor");
+const latencyBadge = document.getElementById("latencyBadge");
+const hwBadge = document.getElementById("hwBadge");
+
+let SPEECH_THRESHOLD = 12;
+const SILENCE_DURATION_MS = 950;
+const MIN_SPEECH_MS = 320;
+
+let audioCtx, analyser, micStream, scriptNode;
+let preRollRing = [];
+let recordedPCM = [];
+let state = "IDLE"; // IDLE | LISTENING | RECORDING | PROCESSING | SPEAKING
+let autoVadMode = true; // true = Mãos-Livres Automático | false = Toque no botão para gravar (PTT)
+let speechStartTime = 0;
+let lastVoiceTime = 0;
+let lastSttMs = "--", lastLlmMs = "--", lastTtsMs = "--";
+
+const audioPlayer = new Audio();
+let ttsFetchQueue = [];
+let isPlayingQueue = false;
+let llmStreamFinished = false;
+let currentAbortController = null;
+
+let coreMemoryMarkdown = "";
+let currentSessionId = null;
+let conversationTurns = [];
+let artifactsStore = []; // Guarda todos os artefactos gerados na sessão
+let activeArtifact = null;
+
+// ============================================================================
+// 1. GESTÃO DE SESSÕES E HISTÓRICO DE CHATS GUARDADOS
+// ============================================================================
+async function loadChatSessionsList() {
+  try {
+    const res = await fetch("/chats");
+    const data = await res.json();
+    const listEl = document.getElementById("sessionList");
+    listEl.innerHTML = "";
+
+    if (!data.sessions || data.sessions.length === 0) {
+      await startNewChatSession();
+      return;
+    }
+
+    if (!currentSessionId) {
+      currentSessionId = data.sessions[0].id;
+      await loadSessionMessages(currentSessionId);
+    }
+
+    for (const s of data.sessions) {
+      const div = document.createElement("div");
+      div.className = "session-item" + (s.id === currentSessionId ? " active" : "");
+      div.onclick = () => selectSession(s.id);
+      div.innerHTML = `
+        <span class="session-title">💬 ${escapeHtml(s.title)}</span>
+        <button class="del-chat-btn" onclick="deleteSession(event, '${s.id}')" title="Apagar conversa">🗑️</button>
+      `;
+      listEl.appendChild(div);
+    }
+  } catch (e) {
+    console.error("Erro ao listar chats:", e);
+  }
+}
+
+async function startNewChatSession() {
+  stopAllAudio();
+  const res = await fetch("/chats/new", { method: "POST" });
+  const data = await res.json();
+  currentSessionId = data.id;
+  conversationTurns = [];
+  chat.innerHTML = "";
+  await loadChatSessionsList();
+  if (window.innerWidth <= 860) document.getElementById("chatSidebar").classList.remove("mobile-open");
+}
+
+async function selectSession(sid) {
+  stopAllAudio();
+  currentSessionId = sid;
+  await loadSessionMessages(sid);
+  await loadChatSessionsList();
+  if (window.innerWidth <= 860) document.getElementById("chatSidebar").classList.remove("mobile-open");
+}
+
+async function loadSessionMessages(sid) {
+  const res = await fetch(`/chats/${sid}`);
+  const data = await res.json();
+  chat.innerHTML = "";
+  conversationTurns = [];
+  for (const m of (data.messages || [])) {
+    conversationTurns.push({ role: m.role, content: m.content });
+    appendMsg(m.content, m.role === "user" ? "user" : "ai");
+  }
+}
+
+async function deleteSession(ev, sid) {
+  ev.stopPropagation();
+  await fetch(`/chats/${sid}`, { method: "DELETE" });
+  if (currentSessionId === sid) currentSessionId = null;
+  await loadChatSessionsList();
+}
+
+async function persistMessageToDB(role, content) {
+  if (!currentSessionId) return;
+  await fetch(`/chats/${currentSessionId}/message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role, content })
+  });
+  loadChatSessionsList();
+}
+
+function toggleSidebar() {
+  const sb = document.getElementById("chatSidebar");
+  if (window.innerWidth <= 860) {
+    sb.classList.toggle("mobile-open");
+  } else {
+    sb.style.display = sb.style.display === "none" ? "flex" : "none";
+  }
+}
+
+// ============================================================================
+// 2. SISTEMA DE ARTEFACTOS ESTILO CLAUDE (PAINEL LATERAL + PREVIEW + EXECUÇÃO)
+// ============================================================================
+function openArtifactInPanel(artId, isStreaming = false) {
+  const art = artifactsStore.find(a => a.id === artId);
+  if (!art) return;
+  activeArtifact = art;
+
+  document.getElementById("artTitle").textContent = `🧩 ${art.title} (${art.lang.toUpperCase()})`;
+  const codeEl = document.getElementById("artCodeContent");
+  codeEl.textContent = art.code;
+  document.getElementById("artToggleBtn").style.display = "inline-flex";
+  document.getElementById("artifactPanel").classList.add("open");
+
+  // Verifica se o código HTML ficou incompleto para mostrar o botão "⏩ Continuar Código"
+  const isHtml = art.lang.toLowerCase() === "html";
+  const isIncomplete = !art.isClosed || (isHtml && !/<\/html>/i.test(art.code));
+  const contBtn = document.getElementById("continueArtBtn");
+  if (contBtn) contBtn.style.display = (!isStreaming && isIncomplete) ? "inline-flex" : "none";
+
+  const isPreviewable = ["html", "svg"].includes(art.lang.toLowerCase());
+  if (isStreaming) {
+    // Durante a geração mostra o código a ser escrito ao vivo (sem piscar o iframe em branco)
+    switchArtTab("code");
+    const view = document.getElementById("artCodeView");
+    view.scrollTop = view.scrollHeight;
+  } else if (isPreviewable) {
+    renderArtifactPreview(art);
+    switchArtTab("preview");
+  } else {
+    switchArtTab("code");
+  }
+}
+
+async function continueCutArtifact() {
+  if (!activeArtifact) return;
+  const contBtn = document.getElementById("continueArtBtn");
+  if (contBtn) contBtn.style.display = "none";
+
+  const tailLines = activeArtifact.code.split("\n").slice(-15).join("\n");
+  statusEl.textContent = "A continuar o código exatamente de onde parou...";
+  switchArtTab("code");
+
+  const continuePrompt = `O teu bloco de código anterior ficou cortado a meio por limite de tokens exatamente nestas linhas finais:\n\n\`\`\`${activeArtifact.lang}\n${tailLines}\n\`\`\`\n\nContinua IMEDIATAMENTE o código exatamente a partir do caracter seguinte a onde parou até fechar todo o ficheiro (\`</body></html>\`), dentro de um único bloco \`\`\`${activeArtifact.lang} ... \`\`\`. Não repitas o início do ficheiro!`;
+
+  const msgs = [
+    { role: "system", content: buildSystemPrompt("") },
+    ...conversationTurns.slice(-6),
+    { role: "user", content: continuePrompt }
+  ];
+
+  try {
+    const res = await fetch(LLM_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "qwen3-coder", messages: msgs, stream: true, temperature: 0.3, max_tokens: 8192 })
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let rawCont = "";
+    const baseCode = activeArtifact.code;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      for (const line of chunk.split("\n")) {
+        if (line.startsWith("data: ") && line !== "data: [DONE]") {
+          try {
+            const data = JSON.parse(line.slice(6));
+            const tok = data.choices[0]?.delta?.content || "";
+            rawCont += tok;
+            const m = rawCont.match(/```[a-zA-Z0-9_:-]*\n([\s\S]*?)(?:```|$)/);
+            if (m) {
+              activeArtifact.code = baseCode + "\n" + m[1];
+              document.getElementById("artCodeContent").textContent = activeArtifact.code;
+              document.getElementById("artCodeView").scrollTop = document.getElementById("artCodeView").scrollHeight;
+            }
+          } catch {}
+        }
+      }
+    }
+    activeArtifact.isClosed = rawCont.includes("```", 10);
+    openArtifactInPanel(activeArtifact.id, false);
+    statusEl.textContent = "Código completado com sucesso!";
+  } catch (e) {
+    statusEl.textContent = "Erro ao continuar código: " + e;
+  }
+}
+
+function renderArtifactPreview(art) {
+  const frame = document.getElementById("artPreviewFrame");
+  const lang = art.lang.toLowerCase();
+  if (lang === "html" || lang === "svg") {
+    let code = art.code || "";
+    const hasStyleOpen = /<style[^>]*>/i.test(code);
+    const hasStyleClose = /<\/style>/i.test(code);
+    const hasBody = /<body[^>]*>/i.test(code) || /<div|<form|<main|<canvas|<svg/i.test(code);
+
+    if (hasStyleOpen && !hasStyleClose) {
+      code += "</style></head><body style='background:#090d16;color:#f59e0b;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:20px;'><div><h2>⚠️ O código foi cortado ainda dentro do &lt;style&gt; (CSS)</h2><p style='color:#94a3b8;margin-top:10px;'>O modelo ainda não tinha chegado ao &lt;body&gt;. Clica no botão laranja <b>⏩ Continuar Código</b> no topo do painel para ele gerar o resto do HTML e JavaScript!</p></div></body></html>";
+    } else if (!hasBody && lang === "html") {
+      code += "<body style='background:#090d16;color:#00d2ff;font-family:sans-serif;padding:30px;'><h3>A aguardar geração dos elementos visuais (&lt;body&gt;)...</h3></body>";
+    }
+    frame.srcdoc = code;
+  } else {
+    frame.srcdoc = `<pre style="font-family:monospace;padding:20px;white-space:pre-wrap;background:#090d16;color:#e2e8f0;">${escapeHtml(art.code)}</pre>`;
+  }
+}
+
+function switchArtTab(tab) {
+  document.getElementById("tabCodeBtn").classList.toggle("active", tab === "code");
+  document.getElementById("tabPreviewBtn").classList.toggle("active", tab === "preview");
+  document.getElementById("tabRunBtn").classList.toggle("active", tab === "run");
+
+  document.getElementById("artCodeView").style.display = tab === "code" ? "block" : "none";
+  document.getElementById("artPreviewFrame").style.display = tab === "preview" ? "block" : "none";
+  document.getElementById("artConsoleView").style.display = tab === "run" ? "block" : "none";
+
+  if (tab === "preview" && activeArtifact) {
+    renderArtifactPreview(activeArtifact);
+  }
+}
+
+async function runCurrentArtifact() {
+  if (!activeArtifact) return;
+  const lang = activeArtifact.lang.toLowerCase();
+  if (lang === "html" || lang === "svg") {
+    switchArtTab("preview");
+    return;
+  }
+  switchArtTab("run");
+  const consoleEl = document.getElementById("artConsoleView");
+  consoleEl.textContent = `[*] A executar código ${activeArtifact.lang} no servidor local...\n`;
+
+  try {
+    const res = await fetch("/run_code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: activeArtifact.lang, code: activeArtifact.code })
+    });
+    const data = await res.json();
+    consoleEl.textContent = `=== Output (${data.ms}ms) ===\n${data.output}`;
+  } catch (e) {
+    consoleEl.textContent = `Erro ao executar: ${e}`;
+  }
+}
+
+function copyArtifactCode() {
+  if (!activeArtifact) return;
+  navigator.clipboard.writeText(activeArtifact.code);
+}
+
+function downloadArtifactCode() {
+  if (!activeArtifact) return;
+  const extMap = { csharp: "cs", cs: "cs", python: "py", py: "py", sql: "sql", javascript: "js", js: "js", html: "html", css: "css", json: "json", bash: "sh", sh: "sh", cpp: "cpp", c: "c", svg: "svg" };
+  const ext = extMap[activeArtifact.lang.toLowerCase()] || "txt";
+  const blob = new Blob([activeArtifact.code], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${activeArtifact.title.replace(/\s+/g, "_").toLowerCase()}.${ext}`;
+  a.click();
+}
+
+function closeArtifactPanel() {
+  document.getElementById("artifactPanel").classList.remove("open");
+}
+
+function toggleArtifactPanel() {
+  document.getElementById("artifactPanel").classList.toggle("open");
+}
+
+// ============================================================================
+// 3. GATEKEEPER DE INTENÇÃO (SÓ CRIA PDF/IMAGEM SE O UTILIZADOR PEDIR!)
+// ============================================================================
+function detectUserExplicitIntent(userText) {
+  const t = userText.toLowerCase();
+  const wantsPdf = /\b(pdf|documento pdf|gera um pdf|cria um pdf|exporta para pdf)\b/.test(t);
+  const wantsImage = /\b(gera uma imagem|cria uma imagem|desenha uma imagem|gera uma foto|cria uma foto|ilustração)\b/.test(t);
+  return { wantsPdf, wantsImage };
+}
+
+function buildSystemPrompt(userText = "") {
+  const intent = detectUserExplicitIntent(userText);
+
+  let prompt = `O teu nome é Jarvis. És o assistente pessoal de engenharia de sistemas e IA do Dinis a correr localmente numa RTX 3060 Ti.
+
+REGRAS DE OURO:
+1. Fala SEMPRE em Português de Portugal (PT-PT) de forma natural, fluida e direta.
+2. Quando estiveres apenas a conversar ou a responder a dúvidas simples, responde apenas com texto conversacional limpo (1 a 3 frases), SEM criar blocos de código, SEM criar PDFs e SEM criar imagens.
+3. ARTEFACTOS DE CÓDIGO (ESTILO CLAUDE): Quando o Dinis te pedir para programar, escrever código, criar uma classe, script, query SQL, página web HTML ou diagrama SVG, diz primeiro 1 frase curta introdutória e coloca o código completo dentro de um bloco \`\`\`linguagem ... \`\`\`. A interface vai transformá-lo num Artefacto interativo automaticamente.
+4. PROIBIDO CRIAR PDFs OU IMAGENS NÃO SOLICITADOS: NUNCA uses blocos \`\`\`pdf nem \`\`\`image a menos que o Dinis tenha pedido explicitamente um PDF ou uma imagem na mensagem atual!`;
+
+  if (intent.wantsPdf) {
+    prompt += `\n5. O DINIS PEDIU EXPLICITAMENTE UM PDF AGORA: Escreve uma frase curta e coloca o conteúdo do documento dentro de \`\`\`pdf:Titulo_Do_PDF ... \`\`\`.`;
+  }
+  if (intent.wantsImage) {
+    prompt += `\n5. O DINIS PEDIU EXPLICITAMENTE UMA IMAGEM AGORA: Escreve uma frase curta e coloca o prompt visual (em inglês) dentro de \`\`\`image ... \`\`\`.`;
+  }
+
+  prompt += `\n\nMEMÓRIA PERSISTENTE DO DINIS (core_memory.md):\n${coreMemoryMarkdown}`;
+  return prompt;
+}
+
+function escapeHtml(str) {
+  return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function renderRichContent(container, rawText, isFinal = false, allowPdf = false, allowImage = false) {
+  const cleanText = rawText.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+  const regex = /```([a-zA-Z0-9_:-]*)\n([\s\S]*?)(?:```|$)/g;
+  let lastIndex = 0;
+  let html = "";
+  let match;
+  let blockIdx = 0;
+  const pdfTasks = [];
+  const imgTasks = [];
+
+  while ((match = regex.exec(cleanText)) !== null) {
+    const before = cleanText.slice(lastIndex, match.index);
+    if (before.trim()) {
+      html += `<div class="prose-text">${escapeHtml(before.trim())}</div>`;
+    }
+
+    const rawTag = (match[1] || "code").trim();
+    const content = match[2];
+    const domId = `art_${Date.now()}_${blockIdx++}`;
+
+    // Só compila PDF se o utilizador tiver mesmo pedido um PDF!
+    if (rawTag.toLowerCase().startsWith("pdf") && allowPdf) {
+      const title = rawTag.includes(":") ? rawTag.split(":")[1].replace(/_/g, " ") : "Documento Jarvis";
+      html += `<div id="${domId}" class="artifact-card">
+        <span>📄 <strong>${escapeHtml(title)}</strong> ${isFinal ? "(A gerar PDF...)" : "(A redigir PDF...)"}</span>
+      </div>`;
+      if (isFinal) pdfTasks.push({ id: domId, title, content });
+    }
+    // Só gera Imagem se o utilizador tiver mesmo pedido uma Imagem!
+    else if ((rawTag.toLowerCase() === "image" || rawTag.toLowerCase() === "img") && allowImage) {
+      html += `<div id="${domId}" class="artifact-card">
+        <span>🎨 <strong>Imagem:</strong> ${escapeHtml(content.trim().slice(0, 50))}...</span>
+      </div>`;
+      if (isFinal && content.trim()) imgTasks.push({ id: domId, prompt: content.trim() });
+    }
+    // Artefacto de Código / App / SVG (Estilo Claude)
+    else {
+      const lang = rawTag.split(":")[0] || "code";
+      const customTitle = rawTag.includes(":") ? rawTag.split(":")[1].replace(/_/g, " ") : `Artefacto ${lang.toUpperCase()}`;
+      const artId = `claude_art_${ container.dataset.msgId || Date.now() }_${blockIdx}`;
+
+      let existing = artifactsStore.find(a => a.id === artId);
+      if (!existing) {
+        const isClosed = match[0].endsWith('```');
+      existing = { id: artId, title: customTitle, lang, code: content, isClosed };
+        artifactsStore.push(existing);
+      } else {
+        existing.code = content;
+      existing.isClosed = match[0].endsWith('```');
+      }
+
+      const linesCount = content.split("\n").length;
+      html += `
+        <div class="claude-artifact-pill" onclick="openArtifactInPanel('${artId}')">
+          <div class="pill-info">
+            <span class="pill-title">🧩 ${escapeHtml(customTitle)}</span>
+            <span class="pill-sub">${escapeHtml(lang.toUpperCase())} • ${linesCount} linhas • Clica para abrir no painel lateral</span>
+          </div>
+          <button class="pill-btn">Abrir Artefacto ➔</button>
+        </div>
+      `;
+
+      // Atualiza o painel lateral em tempo real enquanto o modelo programa!
+      openArtifactInPanel(artId, !isFinal);
+    }
+
+    lastIndex = regex.lastIndex;
+  }
+
+  const remaining = cleanText.slice(lastIndex);
+  if (remaining.trim()) {
+    html += `<div class="prose-text">${escapeHtml(remaining.trim())}</div>`;
+  }
+
+  container.innerHTML = html || `<div class="prose-text">${escapeHtml(cleanText)}</div>`;
+
+  for (const task of pdfTasks) {
+    try {
+      const r = await fetch("/generate_pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: task.title, content: task.content })
+      });
+      const data = await r.json();
+      const el = container.querySelector(`#${task.id}`);
+      if (el && data.url) {
+        el.innerHTML = `<span>✅ <strong>PDF Pronto:</strong> ${escapeHtml(task.title)}</span>
+          <a class="artifact-btn" href="${data.url}" target="_blank" download="${data.filename}">📄 Abrir PDF</a>`;
+      }
+    } catch {}
+  }
+
+  for (const task of imgTasks) {
+    try {
+      const r = await fetch("/generate_image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: task.prompt })
+      });
+      const data = await r.json();
+      const el = container.querySelector(`#${task.id}`);
+      if (el && data.url) {
+        el.innerHTML = `<div style="width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span>🖼️ <strong>Imagem Criada</strong></span>
+            <a class="artifact-btn" href="${data.url}" target="_blank" download="${data.filename}">💾 Download</a>
+          </div>
+          <img class="generated-img" src="${data.url}" alt="Generated Image" />
+        </div>`;
+      }
+    } catch {}
+  }
+}
+
+// ============================================================================
+// 4. VOZ NATURAL + GRAVADOR 48kHz + TELEMETRIA
+// ============================================================================
+function updateMetrics() {
+  latencyBadge.textContent = `STT: ${lastSttMs}ms | LLM: ${lastLlmMs}ms | TTS: ${lastTtsMs}ms`;
+}
+
+async function pollHardwareStats() {
+  try {
+    const r = await fetch("/system_stats");
+    const d = await r.json();
+    if (d.gpu) hwBadge.textContent = `${d.gpu} | ${d.ram}`;
+  } catch {}
+}
+setInterval(pollHardwareStats, 8000);
+
+function enqueueSentenceForTTS(sentenceText) {
+  const clean = sentenceText
+    .replace(/<think>[\s\S]*?<\/think>/g, "")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/[*#_`~]/g, "")
+    .trim();
+  if (clean.length < 2) return;
+
+  const t0 = performance.now();
+  const audioPromise = fetch("/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: clean, voice: voiceSelect.value })
+  })
+    .then(async r => {
+      if (!r.ok) return null;
+      const b = await r.blob();
+      lastTtsMs = Math.round(performance.now() - t0);
+      updateMetrics();
+      return b;
+    })
+    .catch(() => null);
+
+  ttsFetchQueue.push(audioPromise);
+  if (!isPlayingQueue) processAudioQueue();
+}
+
+async function processAudioQueue() {
+  if (isPlayingQueue) return;
+  isPlayingQueue = true;
+  state = "SPEAKING";
+  orb.className = "speaking";
+  orb.textContent = "🔊";
+  statusEl.textContent = "Jarvis a falar... (Toca no 🔊 ou Espaço para calar)";
+
+  while (ttsFetchQueue.length > 0) {
+    const nextAudioPromise = ttsFetchQueue.shift();
+    const blob = await nextAudioPromise;
+    if (!blob || blob.size < 100 || state !== "SPEAKING") continue;
+
+    const url = URL.createObjectURL(blob);
+    await new Promise((resolve) => {
+      audioPlayer.src = url;
+      audioPlayer.playbackRate = Number(speedSelect.value);
+      audioPlayer.onended = () => { URL.revokeObjectURL(url); resolve(); };
+      audioPlayer.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+      audioPlayer.play().catch(() => resolve());
+    });
+  }
+
+  isPlayingQueue = false;
+  if (llmStreamFinished && ttsFetchQueue.length === 0 && state === "SPEAKING") {
+    startListeningState();
+  }
+}
+
+function stopAllAudio() {
+  if (currentAbortController) {
+    try { currentAbortController.abort(); } catch {}
+  }
+  ttsFetchQueue = [];
+  audioPlayer.pause();
+  audioPlayer.src = "";
+  isPlayingQueue = false;
+}
+
+function encodeWAVNative(float32Chunks) {
+  const sr = audioCtx ? audioCtx.sampleRate : 48000;
+  let totalLen = 0;
+  for (const c of float32Chunks) totalLen += c.length;
+  const buffer = new ArrayBuffer(44 + totalLen * 2);
+  const view = new DataView(buffer);
+
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + totalLen * 2, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sr, true);
+  view.setUint32(28, sr * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, totalLen * 2, true);
+
+  let offset = 44;
+  for (const chunk of float32Chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      const s = Math.max(-1, Math.min(1, chunk[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      offset += 2;
+    }
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function bootJarvis() {
+  const savedVoice = localStorage.getItem('jarvis_voice');
+  if (savedVoice) voiceSelect.value = savedVoice;
+  document.getElementById("bootOverlay").style.display = "none";
+  if (window.innerWidth <= 860) {
+    document.getElementById("closeSidebarMobile").style.display = "inline-flex";
+  }
+
+  await loadCoreMemoryFromDisk();
+  await loadChatSessionsList();
+  pollHardwareStats();
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+
+    scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
+    source.connect(scriptNode);
+    scriptNode.connect(audioCtx.destination);
+
+    scriptNode.onaudioprocess = (e) => {
+      const raw = new Float32Array(e.inputBuffer.getChannelData(0));
+      if (state === "LISTENING") {
+        preRollRing.push(raw);
+        if (preRollRing.length > 10) preRollRing.shift();
+      } else if (state === "RECORDING") {
+        recordedPCM.push(raw);
+      }
+    };
+
+    requestAnimationFrame(monitorMicLoop);
+
+    const agora = new Date();
+    const hora = agora.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" });
+    const saudacao = agora.getHours() < 12 ? "Bom dia" : (agora.getHours() < 20 ? "Boa tarde" : "Boa noite");
+    const greeting = `${saudacao} Dinis. São ${hora} e todos os sistemas estão prontos. Como te posso ajudar?`;
+
+    if (conversationTurns.length === 0) {
+      appendMsg(greeting, "ai");
+      conversationTurns.push({ role: "assistant", content: greeting });
+      persistMessageToDB("assistant", greeting);
+    }
+
+    llmStreamFinished = true;
+    enqueueSentenceForTTS(greeting);
+  } catch (err) {
+    statusEl.textContent = "Microfone indisponível: " + err.message;
+  }
+}
+
+function toggleMicMode() {
+  autoVadMode = !autoVadMode;
+  const btn = document.getElementById("micModeBtn");
+  if (autoVadMode) {
+    btn.textContent = "🎙️ Auto";
+    btn.classList.add("active");
+    startListeningState();
+  } else {
+    btn.textContent = "👆 PTT (Toque)";
+    btn.classList.remove("active");
+    state = "IDLE";
+    orb.className = "";
+    orb.textContent = "👆";
+    statusEl.textContent = "Modo Toque: Toca no botão redondo para gravar";
+  }
+}
+
+function handleOrbClick() {
+  if (state === "SPEAKING" || isPlayingQueue) {
+    stopAllAudio();
+    startListeningState();
+    return;
+  }
+  if (!autoVadMode) {
+    if (state !== "RECORDING") {
+      recordedPCM = [];
+      state = "RECORDING";
+      orb.className = "recording";
+      orb.textContent = "🔴";
+      statusEl.textContent = "A gravar... Toca novamente no 🔴 para enviar";
+    } else {
+      finishRecordingAndTranscribe(true);
+    }
+  } else if (state === "RECORDING") {
+    finishRecordingAndTranscribe(true);
+  }
+}
+
+function startListeningState() {
+  preRollRing = [];
+  recordedPCM = [];
+  if (!autoVadMode) {
+    state = "IDLE";
+    orb.className = "";
+    orb.textContent = "👆";
+    statusEl.textContent = "Toca no botão 👆 para falar";
+    return;
+  }
+  state = "LISTENING";
+  orb.className = "listening";
+  orb.textContent = "🎙️";
+  statusEl.textContent = "Estou a ouvir-te...";
+}
+
+function monitorMicLoop() {
+  requestAnimationFrame(monitorMicLoop);
+  if (!analyser) return;
+
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(data);
+
+  let sum = 0;
+  const voiceBins = Math.min(data.length, 90);
+  for (let i = 2; i < voiceBins; i++) sum += data[i];
+  const avgVol = Math.min(100, Math.round((sum / voiceBins) * 0.9));
+
+  volBar.style.width = (state === "SPEAKING" ? 0 : avgVol) + "%";
+
+  if (!autoVadMode || state === "PROCESSING" || state === "SPEAKING") return;
+
+  const now = performance.now();
+
+  if (state === "LISTENING") {
+    if (avgVol >= SPEECH_THRESHOLD) {
+      recordedPCM = [...preRollRing];
+      preRollRing = [];
+      state = "RECORDING";
+      orb.className = "recording";
+      orb.textContent = "🔴";
+      statusEl.textContent = "A ouvir a tua frase...";
+      speechStartTime = now;
+      lastVoiceTime = now;
+    }
+  } else if (state === "RECORDING") {
+    if (avgVol >= SPEECH_THRESHOLD) {
+      lastVoiceTime = now;
+    } else if (now - lastVoiceTime > SILENCE_DURATION_MS) {
+      const totalSpeechDuration = lastVoiceTime - speechStartTime;
+      finishRecordingAndTranscribe(totalSpeechDuration >= MIN_SPEECH_MS);
+    }
+  }
+}
+
+async function finishRecordingAndTranscribe(validSpeech) {
+  state = "PROCESSING";
+  orb.className = "";
+  orb.textContent = "⏳";
+
+  if (!validSpeech || recordedPCM.length < 3) {
+    startListeningState();
+    return;
+  }
+
+  statusEl.textContent = "A transcrever...";
+  const wavBlob = encodeWAVNative(recordedPCM);
+  recordedPCM = [];
+
+  const formData = new FormData();
+  formData.append("audio", wavBlob, "voice.wav");
+
+  try {
+    const res = await fetch("/transcribe", { method: "POST", body: formData });
+    const data = await res.json();
+    lastSttMs = data.ms || "--";
+    updateMetrics();
+
+    const text = (data.text || "").trim();
+    if (text.length > 1) {
+      await askJarvisLLM(text);
+    } else {
+      startListeningState();
+    }
+  } catch (err) {
+    statusEl.textContent = "Erro STT: " + err;
+    setTimeout(startListeningState, 1000);
+  }
+}
+
+async function askJarvisLLM(userText) {
+  appendMsg(userText, "user");
+  conversationTurns.push({ role: "user", content: userText });
+  persistMessageToDB("user", userText);
+
+  const intent = detectUserExplicitIntent(userText);
+  const recentTurns = conversationTurns.slice(-12);
+  const fullMessages = [
+    { role: "system", content: buildSystemPrompt(userText) },
+    ...recentTurns
+  ];
+
+  const aiDiv = appendMsg("", "ai");
+  statusEl.textContent = "Jarvis a responder...";
+  llmStreamFinished = false;
+  currentAbortController = new AbortController();
+  const t0Llm = performance.now();
+  let gotFirstToken = false;
+
+  try {
+    const res = await fetch(LLM_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: currentAbortController.signal,
+      body: JSON.stringify({ model: "qwen3-coder", messages: fullMessages, stream: true, temperature: 0.45, max_tokens: 8192 })
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let fullReply = "";
+    let sentenceBuffer = "";
+    let isFirstChunk = true;
+    let insideCodeFence = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      for (const line of chunk.split("\n")) {
+        if (line.startsWith("data: ") && line !== "data: [DONE]") {
+          try {
+            const data = JSON.parse(line.slice(6));
+            const token = data.choices[0]?.delta?.content || "";
+            if (!gotFirstToken && token.trim()) {
+              gotFirstToken = true;
+              lastLlmMs = Math.round(performance.now() - t0Llm);
+              updateMetrics();
+            }
+            fullReply += token;
+
+            const fenceCount = (fullReply.match(/```/g) || []).length;
+            const nowInsideFence = (fenceCount % 2 === 1);
+
+            if (nowInsideFence && !insideCodeFence) {
+              const cleanIntro = sentenceBuffer.replace(/`/g, "").trim();
+              if (cleanIntro.length > 2) enqueueSentenceForTTS(cleanIntro);
+              sentenceBuffer = "";
+            }
+            insideCodeFence = nowInsideFence;
+
+            if (!insideCodeFence) {
+              sentenceBuffer += token.replace(/`/g, "");
+              const trimmedLen = sentenceBuffer.trim().length;
+              const shouldFlushFirst = isFirstChunk && trimmedLen >= 22 && /[,.;:!?\n]/.test(token);
+              const shouldFlushNext = !isFirstChunk && trimmedLen >= 45 && /[.;:!?\n]/.test(token);
+
+              if (shouldFlushFirst || shouldFlushNext) {
+                enqueueSentenceForTTS(sentenceBuffer);
+                sentenceBuffer = "";
+                isFirstChunk = false;
+              }
+            }
+
+            renderRichContent(aiDiv, fullReply, false, intent.wantsPdf, intent.wantsImage);
+            chat.scrollTop = chat.scrollHeight;
+          } catch {}
+        }
+      }
+    }
+
+    llmStreamFinished = true;
+    await renderRichContent(aiDiv, fullReply, true, intent.wantsPdf, intent.wantsImage);
+    chat.scrollTop = chat.scrollHeight;
+
+    if (!insideCodeFence && sentenceBuffer.trim().length > 2) {
+      enqueueSentenceForTTS(sentenceBuffer);
+    } else if (!isPlayingQueue && ttsFetchQueue.length === 0) {
+      startListeningState();
+    }
+
+    conversationTurns.push({ role: "assistant", content: fullReply });
+    persistMessageToDB("assistant", fullReply);
+
+    fetch("/memory/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_text: userText, ai_text: fullReply })
+    })
+      .then(r => r.json())
+      .then(memRes => {
+        if (memRes.updated && memRes.markdown) {
+          coreMemoryMarkdown = memRes.markdown;
+          memoryEditor.value = coreMemoryMarkdown;
+        }
+      })
+      .catch(() => {});
+
+  } catch (err) {
+    if (err.name !== "AbortError") {
+      aiDiv.textContent = "Erro ao comunicar com o motor local.";
+      startListeningState();
+    }
+  }
+}
+
+function sendManualText() {
+  const input = document.getElementById("textInput");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  stopAllAudio();
+  state = "PROCESSING";
+  askJarvisLLM(text);
+}
+
+async function loadCoreMemoryFromDisk() {
+  try {
+    const res = await fetch("/memory");
+    const data = await res.json();
+    coreMemoryMarkdown = data.markdown || "";
+    memoryEditor.value = coreMemoryMarkdown;
+  } catch {}
+}
+
+async function saveManualMemory() {
+  coreMemoryMarkdown = memoryEditor.value;
+  await fetch("/memory/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ markdown: coreMemoryMarkdown })
+  });
+  closeMemoryModal();
+}
+
+async function addVocabCorrection() {
+  const w = document.getElementById("wrongWord").value.trim();
+  const r = document.getElementById("rightWord").value.trim();
+  if (!w || !r) return;
+  await fetch("/memory/learn_word", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wrong: w, right: r })
+  });
+  document.getElementById("wrongWord").value = "";
+  document.getElementById("rightWord").value = "";
+}
+
+function openMemoryModal() { document.getElementById("memoryModal").classList.add("open"); }
+function closeMemoryModal() { document.getElementById("memoryModal").classList.remove("open"); }
+function updateThreshold(val) { SPEECH_THRESHOLD = Number(val); threshLine.style.left = val + "%"; }
+
+function appendMsg(text, cls) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.dataset.msgId = Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+  if (cls === "user") {
+    div.textContent = text;
+  } else {
+    renderRichContent(div, text, true, false, false);
+  }
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+</script>
+</body>
+</html>

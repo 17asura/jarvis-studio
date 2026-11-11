@@ -1,0 +1,17 @@
+# Modelos de Voz pesados (.onnx) e Caches
+voices/
+tts_cache/
+exports/
+
+# Dados Pessoais, Memória Real e Histórico SQLite Privado
+memory/core_memory.md
+memory/episodic_log.md
+memory/*.db
+memory/*.db-journal
+
+# Python & Ambientes
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
