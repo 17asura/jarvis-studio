@@ -1,22 +1,15 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     host: '0.0.0.0',
-    port: 5173,
-    proxy: {
-      '/llm': 'http://127.0.0.1:3000',
-      '/transcribe': 'http://127.0.0.1:3000',
-      '/tts': 'http://127.0.0.1:3000',
-      '/memory': 'http://127.0.0.1:3000',
-      '/chats': 'http://127.0.0.1:3000',
-      '/system_stats': 'http://127.0.0.1:3000',
-      '/run_code': 'http://127.0.0.1:3000',
-      '/generate_pdf': 'http://127.0.0.1:3000',
-      '/generate_image': 'http://127.0.0.1:3000',
-      '/exports': 'http://127.0.0.1:3000'
+    port: 3000,
+    allowedHosts: true,
+    watch: {
+      ignored: ['**/memory/**', '**/exports/**', '**/tts_cache/**', '**/.playwright-cli/**']
     }
   },
   build: {

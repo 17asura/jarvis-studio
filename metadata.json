@@ -1,0 +1,11 @@
+{
+  "name": "J.A.R.V.I.S. Studio — Assistente Pessoal & Centro de Comando",
+  "description": "Assistente pessoal de voz em tempo real (estilo ChatGPT Voice) com memória instantânea, telemetria de rede/router, estado do homelab, meteorologia/GPS e estúdio de artefactos.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

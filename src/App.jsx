@@ -1,11 +1,41 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Plus,
+  Trash2,
+  Send,
+  Mic,
+  Volume2,
+  Code2,
+  FileText,
+  ExternalLink,
+  Brain,
+  CloudSun,
+  Wifi,
+  Server,
+  PanelLeft,
+  Square
+} from 'lucide-react';
+import {
+  DEFAULT_MEMORY_MD,
+  extractInstantMemories,
+  applyPhoneticCorrections,
+  prepareTextForNaturalSpeech,
+  parseMessageSegments,
+  parseMemorySections,
+  buildSystemPromptWithLiveContext
+} from './utils/jarvisLogic';
+import { FluidVoiceOrb } from './components/FluidVoiceOrb';
+import { ChatGptVoiceView } from './components/ChatGptVoiceView';
+import { CommandCenterView } from './components/CommandCenterView';
+import { InstantMemoryView } from './components/InstantMemoryView';
+import { ArtifactDrawer } from './components/ArtifactDrawer';
 
 const SILENCE_DURATION_MS = 950;
 const MIN_SPEECH_MS = 320;
 
 export default function App() {
-  const [booted, setBooted] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth > 860);
+  const [activeNav, setActiveNav] = useState('chat'); // 'chat' | 'voice' | 'command' | 'memory'
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 960);
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -17,37 +47,52 @@ export default function App() {
   const [threshold, setThreshold] = useState(12);
   const [autoVadMode, setAutoVadMode] = useState(true);
   const [jarvisState, setJarvisState] = useState('IDLE'); // IDLE | LISTENING | RECORDING | PROCESSING | SPEAKING
-  const [statusText, setStatusText] = useState('Pronto');
-  const [micVolume, setMicVolume] = useState(0);
-  const [metrics, setMetrics] = useState({ stt: '--', llm: '--', tts: '--' });
-  const [hwStats, setHwStats] = useState('RTX 3060 Ti');
+  const [statusText, setStatusText] = useState('Pronto · Toca no microfone ou escreve abaixo');
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [micInitialized, setMicInitialized] = useState(false);
 
-  // Memória .MD
-  const [memoryModalOpen, setMemoryModalOpen] = useState(false);
-  const [coreMemoryMd, setCoreMemoryMd] = useState('');
-  const [wrongWord, setWrongWord] = useState('');
-  const [rightWord, setRightWord] = useState('');
+  // Telemetria Viva (Meteorologia/GPS, Router/Tráfego, Homelab & GPU)
+  const [telemetry, setTelemetry] = useState(null);
 
-  // Artefactos Estilo Claude
+  // Memória Instantânea (.MD + Secções + Dicionário Fonético)
+  const [coreMemoryMd, setCoreMemoryMd] = useState(DEFAULT_MEMORY_MD);
+  const [memorySections, setMemorySections] = useState(() => parseMemorySections(DEFAULT_MEMORY_MD));
+  const [corrections, setCorrections] = useState({});
+  const [recentExtractions, setRecentExtractions] = useState([]);
+
+  // Artefactos Estilo Claude + Media Gerada (PDF / Imagens)
   const [artifacts, setArtifacts] = useState([]);
   const [activeArtifactId, setActiveArtifactId] = useState(null);
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [artTab, setArtTab] = useState('code'); // code | preview | run
   const [artConsole, setArtConsole] = useState('');
   const [isStreamingArt, setIsStreamingArt] = useState(false);
+  const [generatedMediaMap, setGeneratedMediaMap] = useState({});
 
-  // Refs para loop de áudio e streaming sem stale closures
+  // Refs sincronizadas para eliminar stale closures no loop de voz e atalhos
   const stateRef = useRef('IDLE');
+  const messagesRef = useRef([]);
+  const currentSessionIdRef = useRef(null);
+  const coreMemoryMdRef = useRef(DEFAULT_MEMORY_MD);
+  const telemetryRef = useRef(null);
+  const correctionsRef = useRef({});
   const autoVadRef = useRef(true);
   const thresholdRef = useRef(12);
   const voiceRef = useRef(voice);
   const speedRef = useRef(speed);
+  const askJarvisFnRef = useRef(null);
+  const handleOrbClickRef = useRef(null);
+
+  // Refs de Áudio & DOM (Zero re-renders a 60Hz)
   const audioCtxRef = useRef(null);
   const analyserRef = useRef(null);
+  const volBarDomRef = useRef(null);
   const preRollRingRef = useRef([]);
   const recordedPCMRef = useRef([]);
   const speechStartRef = useRef(0);
   const lastVoiceRef = useRef(0);
+  const webSpeechRecRef = useRef(null);
+  const liveTranscriptRef = useRef('');
 
   const audioPlayerRef = useRef(new Audio());
   const ttsQueueRef = useRef([]);
@@ -57,10 +102,34 @@ export default function App() {
   const chatScrollRef = useRef(null);
   const codeScrollRef = useRef(null);
 
-  const setGlobalState = (st) => {
+  const setGlobalState = useCallback((st) => {
     stateRef.current = st;
     setJarvisState(st);
-  };
+  }, []);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
+  useEffect(() => {
+    coreMemoryMdRef.current = coreMemoryMd;
+    setMemorySections(parseMemorySections(coreMemoryMd));
+  }, [coreMemoryMd]);
+
+  useEffect(() => {
+    telemetryRef.current = telemetry;
+  }, [telemetry]);
+
+  useEffect(() => {
+    correctionsRef.current = corrections;
+  }, [corrections]);
 
   useEffect(() => {
     voiceRef.current = voice;
@@ -80,234 +149,286 @@ export default function App() {
     autoVadRef.current = autoVadMode;
   }, [autoVadMode]);
 
-  useEffect(() => {
-    if (chatScrollRef.current) {
-      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  // Atalho Tecla Espaço para calar voz
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (e.code === 'Space' && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
-        e.preventDefault();
-        handleOrbClick();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
-
   // ============================================================================
-  // 1. CARREGAR MEMÓRIA .MD, SESSÕES SQLITE E HARDWARE
+  // 1. CARREGAR MEMÓRIA, TELEMETRIA VIVA E SESSÕES DE CONVERSA
   // ============================================================================
-  const loadMemory = async () => {
+  const loadMemory = useCallback(async () => {
     try {
       const r = await fetch('/memory');
       if (r.ok) {
         const d = await r.json();
-        setCoreMemoryMd(d.markdown || '');
+        if (d.markdown) setCoreMemoryMd(d.markdown);
+        if (d.corrections) setCorrections(d.corrections);
+        if (d.recentExtractions) setRecentExtractions(d.recentExtractions);
       }
     } catch {
-      setCoreMemoryMd(localStorage.getItem('jarvis_fallback_md') || '# Memória Central do J.A.R.V.I.S.\n- Nome: Dinis\n');
+      const saved = localStorage.getItem('jarvis_fallback_md');
+      if (saved) setCoreMemoryMd(saved);
     }
-  };
+  }, []);
 
-  const loadSessions = async (selectFirst = false) => {
+  const refreshTelemetry = useCallback(async () => {
     try {
-      const r = await fetch('/chats');
-      if (!r.ok) throw new Error('Offline');
-      const d = await r.json();
-      if (!d.sessions || d.sessions.length === 0) {
-        await createNewSession();
-        return;
-      }
-      setSessions(d.sessions);
-      if (selectFirst || !currentSessionId) {
-        const firstId = d.sessions[0].id;
-        setCurrentSessionId(firstId);
-        await loadSessionMessages(firstId);
-      }
-    } catch {
-      const localChats = JSON.parse(localStorage.getItem('jarvis_local_sessions') || '[]');
-      if (localChats.length === 0) {
-        const sid = 'local_' + Date.now();
-        const initial = [{ id: sid, title: 'Conversa Studio' }];
-        localStorage.setItem('jarvis_local_sessions', JSON.stringify(initial));
-        setSessions(initial);
-        setCurrentSessionId(sid);
-      } else {
-        setSessions(localChats);
-        setCurrentSessionId(localChats[0].id);
-      }
-    }
-  };
-
-  const loadSessionMessages = async (sid) => {
-    try {
-      const r = await fetch(`/chats/${sid}`);
+      const r = await fetch('/telemetry/all');
       if (r.ok) {
         const d = await r.json();
-        const loaded = (d.messages || []).map((m, idx) => ({
-          id: `${sid}_${idx}`,
-          role: m.role,
-          content: m.content
-        }));
-        setMessages(loaded);
-        extractArtifactsFromHistory(loaded);
+        setTelemetry(d);
       }
     } catch {}
-  };
+  }, []);
 
-  const extractArtifactsFromHistory = (msgs) => {
+  const extractArtifactsFromHistory = useCallback((msgs) => {
     const found = [];
     msgs.forEach((m) => {
       if (m.role !== 'assistant') return;
-      const regex = /```([a-zA-Z0-9_:-]*)\n([\s\S]*?)(?:```|$)/g;
-      let match;
-      let idx = 0;
-      while ((match = regex.exec(m.content)) !== null) {
-        const rawTag = (match[1] || 'code').trim();
-        if (rawTag.startsWith('pdf') || rawTag === 'image' || rawTag === 'img') continue;
-        const lang = rawTag.split(':')[0] || 'code';
-        const title = rawTag.includes(':') ? rawTag.split(':')[1].replace(/_/g, ' ') : `Artefacto ${lang.toUpperCase()}`;
-        found.push({
-          id: `art_${m.id}_${idx++}`,
-          title,
-          lang,
-          code: match[2],
-          isClosed: match[0].endsWith('```')
-        });
-      }
+      const segs = parseMessageSegments(m.id, m.content);
+      segs.forEach((s) => {
+        if (s.type === 'artifact') {
+          found.push({
+            id: s.id,
+            title: s.title,
+            lang: s.lang,
+            code: s.content,
+            isClosed: s.isClosed
+          });
+        }
+      });
     });
     setArtifacts(found);
-  };
+  }, []);
 
-  const createNewSession = async () => {
-    stopAllAudio();
-    try {
-      const r = await fetch('/chats/new', { method: 'POST' });
-      const d = await r.json();
-      setCurrentSessionId(d.id);
-      setMessages([]);
-      await loadSessions(false);
-    } catch {
-      const sid = 'local_' + Date.now();
-      setSessions((prev) => [{ id: sid, title: 'Nova Conversa' }, ...prev]);
-      setCurrentSessionId(sid);
-      setMessages([]);
-    }
-    if (window.innerWidth <= 860) setSidebarOpen(false);
-  };
+  const loadSessionMessages = useCallback(
+    async (sid) => {
+      try {
+        const r = await fetch(`/chats/${sid}`);
+        if (r.ok) {
+          const d = await r.json();
+          const loaded = (d.messages || []).map((m, idx) => ({
+            id: `${sid}_${idx}`,
+            role: m.role,
+            content: m.content,
+            memoryUpdated: m.memoryUpdated || [],
+            groundingSources: m.groundingSources || []
+          }));
+          setMessages(loaded);
+          extractArtifactsFromHistory(loaded);
+          return;
+        }
+      } catch {}
+      const localMap = JSON.parse(localStorage.getItem('jarvis_local_msgs') || '{}');
+      const loaded = localMap[sid] || [];
+      setMessages(loaded);
+      extractArtifactsFromHistory(loaded);
+    },
+    [extractArtifactsFromHistory]
+  );
 
-  const deleteSession = async (e, sid) => {
-    e.stopPropagation();
-    try {
-      await fetch(`/chats/${sid}`, { method: 'DELETE' });
-      await loadSessions(currentSessionId === sid);
-    } catch {
-      setSessions((prev) => prev.filter((s) => s.id !== sid));
-    }
-  };
+  const loadSessions = useCallback(
+    async (selectFirst = false) => {
+      try {
+        const r = await fetch('/chats');
+        if (!r.ok) throw new Error('Offline');
+        const d = await r.json();
+        if (!d.sessions || d.sessions.length === 0) {
+          const nr = await fetch('/chats/new', { method: 'POST' });
+          const nd = await nr.json();
+          setSessions([nd]);
+          setCurrentSessionId(nd.id);
+          setMessages([]);
+          return;
+        }
+        setSessions(d.sessions);
+        if (selectFirst || !currentSessionIdRef.current) {
+          const firstId = d.sessions[0].id;
+          setCurrentSessionId(firstId);
+          await loadSessionMessages(firstId);
+        }
+      } catch {
+        const localChats = JSON.parse(localStorage.getItem('jarvis_local_sessions') || '[]');
+        if (localChats.length === 0) {
+          const sid = 'local_' + Date.now();
+          const initial = [{ id: sid, title: 'Conversa Studio' }];
+          localStorage.setItem('jarvis_local_sessions', JSON.stringify(initial));
+          setSessions(initial);
+          setCurrentSessionId(sid);
+        } else {
+          setSessions(localChats);
+          if (selectFirst || !currentSessionIdRef.current) {
+            setCurrentSessionId(localChats[0].id);
+            await loadSessionMessages(localChats[0].id);
+          }
+        }
+      }
+    },
+    [loadSessionMessages]
+  );
 
-  const persistMsg = async (sid, role, content) => {
-    if (!sid) return;
+  useEffect(() => {
+    loadMemory();
+    loadSessions(true);
+    refreshTelemetry();
+    const interval = setInterval(refreshTelemetry, 6000);
+    return () => clearInterval(interval);
+  }, [loadMemory, loadSessions, refreshTelemetry]);
+
+  const persistMsg = async (sid, role, content, memoryUpdated = undefined) => {
+    const targetSid = sid || currentSessionIdRef.current;
+    if (!targetSid) return;
     try {
-      await fetch(`/chats/${sid}/message`, {
+      await fetch(`/chats/${targetSid}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role, content })
+        body: JSON.stringify({ role, content, memoryUpdated })
       });
       loadSessions(false);
-    } catch {}
+    } catch {
+      const localMap = JSON.parse(localStorage.getItem('jarvis_local_msgs') || '{}');
+      const list = localMap[targetSid] || [];
+      list.push({ id: `${targetSid}_${list.length}`, role, content, memoryUpdated });
+      localMap[targetSid] = list;
+      localStorage.setItem('jarvis_local_msgs', JSON.stringify(localMap));
+    }
   };
 
   // ============================================================================
-  // 2. SISTEMA DE VOZ NATURAL E GRAVADOR 48kHz
+  // 2. MOTOR DE VOZ NATURAL (TTS HÍBRIDO SERVER + WEB SPEECH API FALLBACK)
   // ============================================================================
-  const enqueueSentenceForTTS = (sentenceText) => {
-    const clean = sentenceText
-      .replace(/<think>[\s\S]*?<\/think>/g, '')
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/[*#_`~]/g, '')
-      .trim();
-    if (clean.length < 2) return;
-
-    const t0 = performance.now();
-    const audioPromise = fetch('/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: clean, voice: voiceRef.current })
-    })
-      .then(async (r) => {
-        if (!r.ok) return null;
-        const b = await r.blob();
-        setMetrics((m) => ({ ...m, tts: Math.round(performance.now() - t0) }));
-        return b;
-      })
-      .catch(() => null);
-
-    ttsQueueRef.current.push(audioPromise);
-    if (!isPlayingQueueRef.current) processAudioQueue();
+  const speakWithBrowserFallback = (text) => {
+    return new Promise((resolve) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        resolve();
+        return;
+      }
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(prepareTextForNaturalSpeech(text));
+        utter.lang = 'pt-PT';
+        utter.rate = speedRef.current * 1.04;
+        const voices = window.speechSynthesis.getVoices();
+        const ptVoice =
+          voices.find((v) => v.lang.toLowerCase().includes('pt-pt')) ||
+          voices.find((v) => v.lang.toLowerCase().startsWith('pt'));
+        if (ptVoice) utter.voice = ptVoice;
+        utter.onend = () => resolve();
+        utter.onerror = () => resolve();
+        window.speechSynthesis.speak(utter);
+      } catch {
+        resolve();
+      }
+    });
   };
 
-  const processAudioQueue = async () => {
+  const startListeningState = useCallback(() => {
+    preRollRingRef.current = [];
+    recordedPCMRef.current = [];
+    if (!micInitialized) {
+      setGlobalState('IDLE');
+      setStatusText('Pronto · Toca no microfone para ativar voz ou escreve abaixo');
+      return;
+    }
+    if (!autoVadRef.current) {
+      setGlobalState('IDLE');
+      setStatusText('Modo PTT: Toca no botão de voz para gravar');
+      return;
+    }
+    setGlobalState('LISTENING');
+    setStatusText('Escuta ativa · Fala naturalmente com o J.A.R.V.I.S.');
+  }, [micInitialized, setGlobalState]);
+
+  const processAudioQueue = useCallback(async () => {
     if (isPlayingQueueRef.current) return;
     isPlayingQueueRef.current = true;
     setGlobalState('SPEAKING');
-    setStatusText('Jarvis a falar... (Toca no 🔊 ou Espaço para calar)');
+    setStatusText('J.A.R.V.I.S. a falar... (Espaço ou Toca na esfera para interromper)');
 
     while (ttsQueueRef.current.length > 0) {
-      const nextPromise = ttsQueueRef.current.shift();
-      const blob = await nextPromise;
-      if (!blob || blob.size < 100 || stateRef.current !== 'SPEAKING') continue;
+      const nextItem = ttsQueueRef.current.shift();
+      if (!nextItem) continue;
+      const { text, blobPromise } = nextItem;
+      const blob = await blobPromise;
+      if (stateRef.current !== 'SPEAKING') break;
 
-      const url = URL.createObjectURL(blob);
-      await new Promise((resolve) => {
-        const player = audioPlayerRef.current;
-        player.src = url;
-        player.playbackRate = speedRef.current;
-        player.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        player.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        player.play().catch(() => resolve());
-      });
+      if (blob && blob.size > 100) {
+        const url = URL.createObjectURL(blob);
+        await new Promise((resolve) => {
+          const player = audioPlayerRef.current;
+          player.src = url;
+          player.playbackRate = speedRef.current;
+          player.onended = () => {
+            URL.revokeObjectURL(url);
+            resolve();
+          };
+          player.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve();
+          };
+          player.play().catch(() => {
+            URL.revokeObjectURL(url);
+            resolve();
+          });
+        });
+      } else {
+        await speakWithBrowserFallback(text);
+      }
     }
 
     isPlayingQueueRef.current = false;
     if (llmFinishedRef.current && ttsQueueRef.current.length === 0 && stateRef.current === 'SPEAKING') {
       startListeningState();
     }
-  };
+  }, [setGlobalState, startListeningState]);
 
-  const stopAllAudio = () => {
+  const enqueueSentenceForTTS = useCallback(
+    (sentenceText) => {
+      const clean = prepareTextForNaturalSpeech(sentenceText);
+      if (clean.length < 2) return;
+
+      const blobPromise = fetch('/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: clean, voice: voiceRef.current })
+      })
+        .then(async (r) => {
+          if (!r.ok || r.status === 204) return null;
+          return await r.blob();
+        })
+        .catch(() => null);
+
+      ttsQueueRef.current.push({ text: clean, blobPromise });
+      if (!isPlayingQueueRef.current) processAudioQueue();
+    },
+    [processAudioQueue]
+  );
+
+  const stopAllAudio = useCallback(() => {
     if (abortCtrlRef.current) {
-      try { abortCtrlRef.current.abort(); } catch {}
+      try {
+        abortCtrlRef.current.abort();
+      } catch {}
     }
     ttsQueueRef.current = [];
     audioPlayerRef.current.pause();
     audioPlayerRef.current.src = '';
-    isPlayingQueueRef.current = false;
-  };
-
-  const startListeningState = () => {
-    preRollRingRef.current = [];
-    recordedPCMRef.current = [];
-    if (!autoVadRef.current) {
-      setGlobalState('IDLE');
-      setStatusText('Modo Toque: Toca no botão 👆 para gravar');
-      return;
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
     }
-    setGlobalState('LISTENING');
-    setStatusText('Estou a ouvir-te...');
-  };
+    isPlayingQueueRef.current = false;
+  }, []);
 
+  // ============================================================================
+  // 3. CAPTURA DE MICROFONE 48kHz + TRANSCRIÇÃO HÍBRIDA
+  // ============================================================================
   const encodeWAVNative = (float32Chunks) => {
     const sr = audioCtxRef.current ? audioCtxRef.current.sampleRate : 48000;
     let totalLen = 0;
     for (const c of float32Chunks) totalLen += c.length;
     const buffer = new ArrayBuffer(44 + totalLen * 2);
     const view = new DataView(buffer);
-    const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+    const writeStr = (off, s) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+    };
 
     writeStr(0, 'RIFF');
     view.setUint32(4, 36 + totalLen * 2, true);
@@ -327,28 +448,66 @@ export default function App() {
     for (const chunk of float32Chunks) {
       for (let i = 0; i < chunk.length; i++) {
         const s = Math.max(-1, Math.min(1, chunk[i]));
-        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
         offset += 2;
       }
     }
     return new Blob([buffer], { type: 'audio/wav' });
   };
 
-  const bootJarvis = async () => {
-    setBooted(true);
-    await loadMemory();
-    await loadSessions(true);
+  const finishRecordingAndTranscribe = useCallback(
+    async (validSpeech) => {
+      setGlobalState('PROCESSING');
+      const capturedTranscript = liveTranscriptRef.current.trim();
+      liveTranscriptRef.current = '';
 
-    // Poll de estatísticas da RTX 3060 Ti
-    fetch('/system_stats').then((r) => r.json()).then((d) => {
-      if (d.gpu) setHwStats(`${d.gpu} | ${d.ram}`);
-    }).catch(() => {});
+      if (!validSpeech || (recordedPCMRef.current.length < 3 && !capturedTranscript)) {
+        startListeningState();
+        return;
+      }
 
+      setStatusText('A transcrever a tua frase...');
+      const wavBlob = encodeWAVNative(recordedPCMRef.current);
+      recordedPCMRef.current = [];
+
+      const formData = new FormData();
+      formData.append('audio', wavBlob, 'voice.wav');
+
+      try {
+        const res = await fetch('/transcribe', { method: 'POST', body: formData });
+        const data = await res.json();
+        let text = (data.text || '').trim();
+        if (!text && capturedTranscript) {
+          text = applyPhoneticCorrections(capturedTranscript, correctionsRef.current);
+        }
+        setLiveTranscript('');
+        if (text.length > 1 && askJarvisFnRef.current) {
+          await askJarvisFnRef.current(text, true);
+        } else {
+          startListeningState();
+        }
+      } catch {
+        if (capturedTranscript.length > 1 && askJarvisFnRef.current) {
+          const corrected = applyPhoneticCorrections(capturedTranscript, correctionsRef.current);
+          setLiveTranscript('');
+          await askJarvisFnRef.current(corrected, true);
+        } else {
+          setStatusText('Microfone pronto.');
+          setTimeout(startListeningState, 800);
+        }
+      }
+    },
+    [setGlobalState, startListeningState]
+  );
+
+  const ensureMicrophoneBooted = useCallback(async () => {
+    if (micInitialized && audioCtxRef.current) return true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
       });
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioCtx();
       audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
@@ -370,6 +529,29 @@ export default function App() {
         }
       };
 
+      // Reconhecimento Web Speech API em paralelo para legendas instantâneas PT-PT
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRec) {
+        try {
+          const rec = new SpeechRec();
+          rec.lang = 'pt-PT';
+          rec.continuous = true;
+          rec.interimResults = true;
+          rec.onresult = (ev) => {
+            let txt = '';
+            for (let i = ev.resultIndex; i < ev.results.length; i++) {
+              txt += ev.results[i][0].transcript;
+            }
+            if (txt.trim()) {
+              liveTranscriptRef.current = txt.trim();
+              setLiveTranscript(txt.trim());
+            }
+          };
+          rec.start();
+          webSpeechRecRef.current = rec;
+        } catch {}
+      }
+
       const monitorLoop = () => {
         requestAnimationFrame(monitorLoop);
         if (!analyserRef.current) return;
@@ -380,7 +562,11 @@ export default function App() {
         const bins = Math.min(data.length, 90);
         for (let i = 2; i < bins; i++) sum += data[i];
         const avgVol = Math.min(100, Math.round((sum / bins) * 0.9));
-        setMicVolume(stateRef.current === 'SPEAKING' ? 0 : avgVol);
+
+        // Atualização direta no DOM da barra de volume sem re-renderizar o React a 60Hz!
+        if (volBarDomRef.current) {
+          volBarDomRef.current.style.width = `${stateRef.current === 'SPEAKING' ? 0 : avgVol}%`;
+        }
 
         if (!autoVadRef.current || ['PROCESSING', 'SPEAKING'].includes(stateRef.current)) return;
 
@@ -404,236 +590,337 @@ export default function App() {
         }
       };
       requestAnimationFrame(monitorLoop);
-
-      const agora = new Date();
-      const hora = agora.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
-      const saudacao = agora.getHours() < 12 ? 'Bom dia' : agora.getHours() < 20 ? 'Boa tarde' : 'Boa noite';
-      const greeting = `${saudacao} Dinis. São ${hora} e o estúdio React está operacional. Como te posso ajudar?`;
-
-      llmFinishedRef.current = true;
-      enqueueSentenceForTTS(greeting);
+      setMicInitialized(true);
+      setGlobalState(autoVadRef.current ? 'LISTENING' : 'IDLE');
+      setStatusText('Microfone ativo · Escuta inteligente ligada');
+      return true;
     } catch (err) {
-      setStatusText('Microfone indisponível: ' + err.message);
+      setStatusText('Microfone sem permissão ou indisponível — usa o chat ou os comandos de voz.');
+      return false;
     }
-  };
+  }, [micInitialized, finishRecordingAndTranscribe, setGlobalState]);
 
-  const finishRecordingAndTranscribe = async (validSpeech) => {
-    setGlobalState('PROCESSING');
-    if (!validSpeech || recordedPCMRef.current.length < 3) {
-      startListeningState();
-      return;
-    }
+  // ============================================================================
+  // 4. COMUNICAÇÃO COM O LLM + MEMÓRIA INSTANTÂNEA + ARTEFACTOS + PDF/IMG
+  // ============================================================================
+  const updateLiveArtifactFromStream = useCallback((msgId, rawText, isFinal) => {
+    const segs = parseMessageSegments(msgId, rawText);
+    segs.forEach((s) => {
+      if (s.type === 'artifact') {
+        setArtifacts((prev) => {
+          const exists = prev.find((a) => a.id === s.id);
+          if (!exists) {
+            return [
+              ...prev,
+              { id: s.id, title: s.title, lang: s.lang, code: s.content, isClosed: s.isClosed }
+            ];
+          }
+          return prev.map((a) =>
+            a.id === s.id ? { ...a, code: s.content, isClosed: s.isClosed } : a
+          );
+        });
+        setActiveArtifactId(s.id);
+        setArtifactPanelOpen(true);
+        setIsStreamingArt(!isFinal);
 
-    setStatusText('A transcrever...');
-    const wavBlob = encodeWAVNative(recordedPCMRef.current);
-    recordedPCMRef.current = [];
-
-    const formData = new FormData();
-    formData.append('audio', wavBlob, 'voice.wav');
-
-    try {
-      const res = await fetch('/transcribe', { method: 'POST', body: formData });
-      const data = await res.json();
-      setMetrics((m) => ({ ...m, stt: data.ms || '--' }));
-      const text = (data.text || '').trim();
-      if (text.length > 1) {
-        await askJarvisLLM(text);
-      } else {
-        startListeningState();
+        if (!isFinal) {
+          setArtTab('code');
+          if (codeScrollRef.current) {
+            codeScrollRef.current.scrollTop = codeScrollRef.current.scrollHeight;
+          }
+        } else if (['html', 'svg'].includes((s.lang || '').toLowerCase())) {
+          setArtTab('preview');
+        }
+      } else if (isFinal && s.type === 'pdf' && s.id) {
+        fetch('/generate_pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: s.title, content: s.content })
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.url) {
+              setGeneratedMediaMap((prev) => ({ ...prev, [s.id]: { type: 'pdf', url: d.url, title: s.title } }));
+            }
+          })
+          .catch(() => {});
+      } else if (isFinal && s.type === 'image' && s.id) {
+        fetch('/generate_image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: s.content })
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.url) {
+              setGeneratedMediaMap((prev) => ({
+                ...prev,
+                [s.id]: { type: 'image', url: d.url, prompt: s.content }
+              }));
+            }
+          })
+          .catch(() => {});
       }
-    } catch (err) {
-      setStatusText('Erro STT: ' + err.message);
-      setTimeout(startListeningState, 1000);
-    }
-  };
+    });
+  }, []);
 
-  const handleOrbClick = () => {
+  const askJarvisLLM = useCallback(
+    async (userText, shouldSpeakReply = false) => {
+      const cleanUserText = (userText || '').trim();
+      if (!cleanUserText) return;
+
+      stopAllAudio();
+      setGlobalState('PROCESSING');
+
+      // 1. Extração Instantânea de Memória L1 -> L2 (< 1ms) antes da chamada ao LLM
+      const memResult = extractInstantMemories(cleanUserText, coreMemoryMdRef.current);
+      const memoryBadges = memResult.extractedFacts.map(
+        (f) => `${f.category}: ${f.fact}`
+      );
+      if (memResult.updated) {
+        setCoreMemoryMd(memResult.newMarkdown);
+        setRecentExtractions((prev) => [...memResult.extractedFacts, ...prev].slice(0, 20));
+      }
+
+      const userMsgId = 'msg_' + Date.now();
+      const aiMsgId = 'msg_' + (Date.now() + 1);
+      const currentHistory = messagesRef.current;
+      const updatedHistory = [
+        ...currentHistory,
+        {
+          id: userMsgId,
+          role: 'user',
+          content: cleanUserText,
+          memoryUpdated: memoryBadges
+        }
+      ];
+
+      setMessages([
+        ...updatedHistory,
+        { id: aiMsgId, role: 'assistant', content: '', groundingSources: [] }
+      ]);
+      persistMsg(currentSessionIdRef.current, 'user', cleanUserText, memoryBadges);
+
+      setStatusText('J.A.R.V.I.S. a processar resposta...');
+      llmFinishedRef.current = false;
+      abortCtrlRef.current = new AbortController();
+
+      const systemPrompt = buildSystemPromptWithLiveContext(
+        cleanUserText,
+        memResult.newMarkdown,
+        telemetryRef.current
+      );
+
+      const fullMessages = [
+        { role: 'system', content: systemPrompt },
+        ...updatedHistory.slice(-12).map((m) => ({ role: m.role, content: m.content }))
+      ];
+
+      try {
+        const res = await fetch('/llm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: abortCtrlRef.current.signal,
+          body: JSON.stringify({
+            model: 'qwen3-coder',
+            messages: fullMessages,
+            stream: true
+          })
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let fullReply = '';
+        let sentenceBuffer = '';
+        let isFirstChunk = true;
+        let insideCodeFence = false;
+        let groundingSources = [];
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          for (const line of chunk.split('\n')) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const data = JSON.parse(line.slice(6));
+                const token = data.choices?.[0]?.delta?.content || '';
+                if (data.groundingSources) {
+                  groundingSources = data.groundingSources;
+                }
+                fullReply += token;
+
+                if (shouldSpeakReply || activeNav === 'voice' || micInitialized) {
+                  const fenceCount = (fullReply.match(/```/g) || []).length;
+                  const nowInsideFence = fenceCount % 2 === 1;
+
+                  if (nowInsideFence && !insideCodeFence) {
+                    const cleanIntro = sentenceBuffer.replace(/`/g, '').trim();
+                    if (cleanIntro.length > 2) enqueueSentenceForTTS(cleanIntro);
+                    sentenceBuffer = '';
+                  }
+                  insideCodeFence = nowInsideFence;
+
+                  if (!insideCodeFence) {
+                    sentenceBuffer += token.replace(/`/g, '');
+                    const trimmedLen = sentenceBuffer.trim().length;
+                    const shouldFlushFirst =
+                      isFirstChunk && trimmedLen >= 24 && /[,.;:!?\n]/.test(token);
+                    const shouldFlushNext =
+                      !isFirstChunk && trimmedLen >= 48 && /[.;:!?\n]/.test(token);
+                    if (shouldFlushFirst || shouldFlushNext) {
+                      enqueueSentenceForTTS(sentenceBuffer);
+                      sentenceBuffer = '';
+                      isFirstChunk = false;
+                    }
+                  }
+                }
+
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === aiMsgId
+                      ? { ...m, content: fullReply, groundingSources }
+                      : m
+                  )
+                );
+                updateLiveArtifactFromStream(aiMsgId, fullReply, false);
+              } catch {}
+            }
+          }
+        }
+
+        llmFinishedRef.current = true;
+        updateLiveArtifactFromStream(aiMsgId, fullReply, true);
+
+        if (
+          (shouldSpeakReply || activeNav === 'voice' || micInitialized) &&
+          !insideCodeFence &&
+          sentenceBuffer.trim().length > 2
+        ) {
+          enqueueSentenceForTTS(sentenceBuffer);
+        } else if (!isPlayingQueueRef.current && ttsQueueRef.current.length === 0) {
+          startListeningState();
+        }
+
+        persistMsg(currentSessionIdRef.current, 'assistant', fullReply);
+
+        fetch('/memory/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_text: cleanUserText, ai_text: fullReply })
+        })
+          .then((r) => r.json())
+          .then((memRes) => {
+            if (memRes.updated && memRes.markdown) {
+              setCoreMemoryMd(memRes.markdown);
+            }
+            if (memRes.recentExtractions) {
+              setRecentExtractions(memRes.recentExtractions);
+            }
+          })
+          .catch(() => {});
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setStatusText('Pronto.');
+          startListeningState();
+        }
+      }
+    },
+    [
+      activeNav,
+      micInitialized,
+      enqueueSentenceForTTS,
+      setGlobalState,
+      startListeningState,
+      stopAllAudio,
+      updateLiveArtifactFromStream
+    ]
+  );
+
+  useEffect(() => {
+    askJarvisFnRef.current = askJarvisLLM;
+  }, [askJarvisLLM]);
+
+  const handleOrbClick = useCallback(async () => {
     if (stateRef.current === 'SPEAKING' || isPlayingQueueRef.current) {
       stopAllAudio();
       startListeningState();
       return;
     }
+    const ok = await ensureMicrophoneBooted();
+    if (!ok) return;
+
     if (!autoVadRef.current) {
       if (stateRef.current !== 'RECORDING') {
         recordedPCMRef.current = [];
         setGlobalState('RECORDING');
-        setStatusText('A gravar... Toca novamente no 🔴 para enviar');
+        setStatusText('A gravar... Toca novamente para enviar');
       } else {
         finishRecordingAndTranscribe(true);
       }
     } else if (stateRef.current === 'RECORDING') {
       finishRecordingAndTranscribe(true);
+    } else {
+      recordedPCMRef.current = [];
+      setGlobalState('RECORDING');
+      speechStartRef.current = performance.now();
+      lastVoiceRef.current = performance.now();
+      setStatusText('A ouvir a tua frase...');
     }
-  };
+  }, [
+    ensureMicrophoneBooted,
+    finishRecordingAndTranscribe,
+    setGlobalState,
+    startListeningState,
+    stopAllAudio
+  ]);
 
-  // ============================================================================
-  // 3. COMUNICAÇÃO COM O LLM + ARTEFACTOS ESTILO CLAUDE + CONTINUAR CÓDIGO
-  // ============================================================================
-  const detectIntent = (text) => {
-    const t = text.toLowerCase();
-    return {
-      wantsPdf: /\b(pdf|documento pdf|gera um pdf|cria um pdf|exporta para pdf)\b/.test(t),
-      wantsImage: /\b(gera uma imagem|cria uma imagem|desenha uma imagem|gera uma foto|cria uma foto)\b/.test(t)
+  useEffect(() => {
+    handleOrbClickRef.current = handleOrbClick;
+  }, [handleOrbClick]);
+
+  // Atalho Tecla Espaço (sem stale closures!)
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (
+        e.code === 'Space' &&
+        !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName || '')
+      ) {
+        e.preventDefault();
+        if (handleOrbClickRef.current) handleOrbClickRef.current();
+      }
     };
-  };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
-  const buildSystemPrompt = (userText = '') => {
-    const intent = detectIntent(userText);
-    let prompt = `O teu nome é Jarvis. És o assistente pessoal de engenharia de sistemas e IA do Dinis a correr localmente numa RTX 3060 Ti.
-
-REGRAS DE OURO:
-1. Fala SEMPRE em Português de Portugal (PT-PT) de forma natural, fluida e direta.
-2. Quando estiveres apenas a conversar ou a responder a dúvidas simples, responde apenas com texto conversacional limpo (1 a 3 frases), SEM criar blocos de código, SEM criar PDFs e SEM criar imagens.
-3. ARTEFACTOS DE CÓDIGO (ESTILO CLAUDE): Quando o Dinis pedir código ou uma página HTML/3D, diz primeiro 1 frase curta introdutória e coloca o código COMPLETO dentro de \`\`\`linguagem ... \`\`\`.
-   - REGRA CRÍTICA PARA HTML/WEB: Escreve SEMPRE o ficheiro completo até ao \`</html>\` final! Mantém o CSS compacto para garantir espaço para todo o \`<body>\` e \`<script>\`.
-4. PROIBIDO CRIAR PDFs OU IMAGENS NÃO SOLICITADOS: NUNCA uses blocos \`\`\`pdf nem \`\`\`image a menos que o Dinis tenha pedido explicitamente na mensagem atual!`;
-
-    if (intent.wantsPdf) prompt += `\n5. O DINIS PEDIU UM PDF AGORA: Usa \`\`\`pdf:Titulo_Do_PDF ... \`\`\`.`;
-    if (intent.wantsImage) prompt += `\n5. O DINIS PEDIU UMA IMAGEM AGORA: Usa \`\`\`image ... \`\`\`.`;
-
-    prompt += `\n\nMEMÓRIA PERSISTENTE DO DINIS (core_memory.md):\n${coreMemoryMd}`;
-    return prompt;
-  };
-
-  const askJarvisLLM = async (userText) => {
-    const userMsgId = 'msg_' + Date.now();
-    const aiMsgId = 'msg_' + (Date.now() + 1);
-    const updatedHistory = [...messages, { id: userMsgId, role: 'user', content: userText }];
-
-    setMessages([...updatedHistory, { id: aiMsgId, role: 'assistant', content: '' }]);
-    persistMsg(currentSessionId, 'user', userText);
-
-    setStatusText('Jarvis a responder...');
-    llmFinishedRef.current = false;
-    abortCtrlRef.current = new AbortController();
-    const t0Llm = performance.now();
-    let gotFirstToken = false;
-
-    const fullMessages = [
-      { role: 'system', content: buildSystemPrompt(userText) },
-      ...updatedHistory.slice(-12).map((m) => ({ role: m.role, content: m.content }))
-    ];
-
+  // ============================================================================
+  // 5. GESTÃO DE SESSÕES, ARTEFACTOS E AÇÕES DO CENTRO DE COMANDO
+  // ============================================================================
+  const createNewSession = async () => {
+    stopAllAudio();
     try {
-      const res = await fetch('/llm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: abortCtrlRef.current.signal,
-        body: JSON.stringify({ model: 'qwen3-coder', messages: fullMessages, stream: true, temperature: 0.4, max_tokens: 8192 })
-      });
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let fullReply = '';
-      let sentenceBuffer = '';
-      let isFirstChunk = true;
-      let insideCodeFence = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split('\n')) {
-          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-            try {
-              const data = JSON.parse(line.slice(6));
-              const token = data.choices[0]?.delta?.content || '';
-              if (!gotFirstToken && token.trim()) {
-                gotFirstToken = true;
-                setMetrics((m) => ({ ...m, llm: Math.round(performance.now() - t0Llm) }));
-              }
-              fullReply += token;
-
-              const fenceCount = (fullReply.match(/```/g) || []).length;
-              const nowInsideFence = fenceCount % 2 === 1;
-
-              if (nowInsideFence && !insideCodeFence) {
-                const cleanIntro = sentenceBuffer.replace(/`/g, '').trim();
-                if (cleanIntro.length > 2) enqueueSentenceForTTS(cleanIntro);
-                sentenceBuffer = '';
-              }
-              insideCodeFence = nowInsideFence;
-
-              if (!insideCodeFence) {
-                sentenceBuffer += token.replace(/`/g, '');
-                const trimmedLen = sentenceBuffer.trim().length;
-                const shouldFlushFirst = isFirstChunk && trimmedLen >= 22 && /[,.;:!?\n]/.test(token);
-                const shouldFlushNext = !isFirstChunk && trimmedLen >= 45 && /[.;:!?\n]/.test(token);
-                if (shouldFlushFirst || shouldFlushNext) {
-                  enqueueSentenceForTTS(sentenceBuffer);
-                  sentenceBuffer = '';
-                  isFirstChunk = false;
-                }
-              }
-
-              setMessages((prev) => prev.map((m) => (m.id === aiMsgId ? { ...m, content: fullReply } : m)));
-              updateLiveArtifactFromStream(aiMsgId, fullReply, false);
-            } catch {}
-          }
-        }
-      }
-
-      llmFinishedRef.current = true;
-      updateLiveArtifactFromStream(aiMsgId, fullReply, true);
-
-      if (!insideCodeFence && sentenceBuffer.trim().length > 2) {
-        enqueueSentenceForTTS(sentenceBuffer);
-      } else if (!isPlayingQueueRef.current && ttsQueueRef.current.length === 0) {
-        startListeningState();
-      }
-
-      persistMsg(currentSessionId, 'assistant', fullReply);
-
-      fetch('/memory/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_text: userText, ai_text: fullReply })
-      })
-        .then((r) => r.json())
-        .then((memRes) => {
-          if (memRes.updated && memRes.markdown) setCoreMemoryMd(memRes.markdown);
-        })
-        .catch(() => {});
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        setStatusText('Erro ao comunicar com o servidor local.');
-        startListeningState();
-      }
+      const r = await fetch('/chats/new', { method: 'POST' });
+      const d = await r.json();
+      setCurrentSessionId(d.id);
+      setMessages([]);
+      await loadSessions(false);
+    } catch {
+      const sid = 'local_' + Date.now();
+      setSessions((prev) => [{ id: sid, title: 'Nova Conversa' }, ...prev]);
+      setCurrentSessionId(sid);
+      setMessages([]);
     }
+    if (window.innerWidth <= 960) setSidebarOpen(false);
   };
 
-  const updateLiveArtifactFromStream = (msgId, rawText, isFinal) => {
-    const cleanText = rawText.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-    const regex = /```([a-zA-Z0-9_:-]*)\n([\s\S]*?)(?:```|$)/g;
-    let match;
-    let idx = 0;
-
-    while ((match = regex.exec(cleanText)) !== null) {
-      const rawTag = (match[1] || 'code').trim();
-      if (rawTag.toLowerCase().startsWith('pdf') || ['image', 'img'].includes(rawTag.toLowerCase())) continue;
-
-      const lang = rawTag.split(':')[0] || 'code';
-      const title = rawTag.includes(':') ? rawTag.split(':')[1].replace(/_/g, ' ') : `Artefacto ${lang.toUpperCase()}`;
-      const artId = `art_${msgId}_${idx++}`;
-      const isClosed = match[0].endsWith('```');
-      const code = match[2];
-
-      setArtifacts((prev) => {
-        const exists = prev.find((a) => a.id === artId);
-        if (!exists) return [...prev, { id: artId, title, lang, code, isClosed }];
-        return prev.map((a) => (a.id === artId ? { ...a, code, isClosed } : a));
-      });
-
-      setActiveArtifactId(artId);
-      setArtifactPanelOpen(true);
-      setIsStreamingArt(!isFinal);
-
-      if (!isFinal) {
-        setArtTab('code');
-        if (codeScrollRef.current) codeScrollRef.current.scrollTop = codeScrollRef.current.scrollHeight;
-      } else if (['html', 'svg'].includes(lang.toLowerCase())) {
-        setArtTab('preview');
-      }
+  const deleteSession = async (e, sid) => {
+    e.stopPropagation();
+    try {
+      await fetch(`/chats/${sid}`, { method: 'DELETE' });
+      await loadSessions(currentSessionId === sid);
+    } catch {
+      setSessions((prev) => prev.filter((s) => s.id !== sid));
     }
   };
 
@@ -646,7 +933,7 @@ REGRAS DE OURO:
     setStatusText('A continuar código exatamente de onde parou...');
 
     const tailLines = activeArtifact.code.split('\n').slice(-15).join('\n');
-    const continuePrompt = `O teu bloco de código anterior ficou cortado a meio nestas linhas finais:\n\n\`\`\`${activeArtifact.lang}\n${tailLines}\n\`\`\`\n\nContinua IMEDIATAMENTE o código exatamente a partir do caracter seguinte até fechar todo o ficheiro (\`</body></html>\`), dentro de um bloco \`\`\`${activeArtifact.lang} ... \`\`\`. Não repitas o início!`;
+    const continuePrompt = `O teu bloco de código anterior ficou cortado nestas linhas finais:\n\n\`\`\`${activeArtifact.lang}\n${tailLines}\n\`\`\`\n\nContinua IMEDIATAMENTE o código exatamente a partir do caracter seguinte até fechar todo o ficheiro (\`</body></html>\`), dentro de um bloco \`\`\`${activeArtifact.lang} ... \`\`\`. Não repitas o início!`;
 
     const baseCode = activeArtifact.code;
     try {
@@ -655,10 +942,14 @@ REGRAS DE OURO:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'qwen3-coder',
-          messages: [{ role: 'system', content: buildSystemPrompt('') }, { role: 'user', content: continuePrompt }],
-          stream: true,
-          temperature: 0.3,
-          max_tokens: 8192
+          messages: [
+            {
+              role: 'system',
+              content: buildSystemPromptWithLiveContext('', coreMemoryMdRef.current, telemetryRef.current)
+            },
+            { role: 'user', content: continuePrompt }
+          ],
+          stream: true
         })
       });
       const reader = res.body.getReader();
@@ -673,12 +964,16 @@ REGRAS DE OURO:
           if (line.startsWith('data: ') && line !== 'data: [DONE]') {
             try {
               const data = JSON.parse(line.slice(6));
-              rawCont += data.choices[0]?.delta?.content || '';
+              rawCont += data.choices?.[0]?.delta?.content || '';
               const m = rawCont.match(/```[a-zA-Z0-9_:-]*\n([\s\S]*?)(?:```|$)/);
               if (m) {
                 const merged = baseCode + '\n' + m[1];
                 setArtifacts((prev) =>
-                  prev.map((a) => (a.id === activeArtifact.id ? { ...a, code: merged, isClosed: rawCont.includes('```', 10) } : a))
+                  prev.map((a) =>
+                    a.id === activeArtifact.id
+                      ? { ...a, code: merged, isClosed: rawCont.includes('```', 10) }
+                      : a
+                  )
                 );
               }
             } catch {}
@@ -687,10 +982,10 @@ REGRAS DE OURO:
       }
       setIsStreamingArt(false);
       if (['html', 'svg'].includes(activeArtifact.lang.toLowerCase())) setArtTab('preview');
-      setStatusText('Código completado!');
+      setStatusText('Código completado.');
     } catch (e) {
       setIsStreamingArt(false);
-      setStatusText('Erro ao continuar: ' + e.message);
+      setStatusText('Erro ao continuar código.');
     }
   };
 
@@ -716,290 +1011,624 @@ REGRAS DE OURO:
     }
   };
 
-  const buildSafePreviewHtml = (art) => {
-    if (!art) return '';
-    let code = art.code || '';
-    const hasStyleOpen = /<style[^>]*>/i.test(code);
-    const hasStyleClose = /<\/style>/i.test(code);
-    if (hasStyleOpen && !hasStyleClose) {
-      return (
-        code +
-        "</style></head><body style='background:#090d16;color:#f59e0b;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:24px;'><div><h2>⚠️ Código cortado dentro do &lt;style&gt;</h2><p style='color:#94a3b8;margin-top:10px;'>Clica no botão laranja <b>⏩ Continuar Código</b> no topo do painel para terminar o ficheiro!</p></div></body></html>"
-      );
-    }
-    return code;
-  };
-
-  const renderMessageContent = (msg) => {
-    if (msg.role === 'user') return msg.content;
-    const cleanText = (msg.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-    const parts = [];
-    const regex = /```([a-zA-Z0-9_:-]*)\n([\s\S]*?)(?:```|$)/g;
-    let lastIndex = 0;
-    let match;
-    let idx = 0;
-
-    while ((match = regex.exec(cleanText)) !== null) {
-      const before = cleanText.slice(lastIndex, match.index);
-      if (before.trim()) parts.push(<div key={`p_${idx}`} className="prose-text">{before.trim()}</div>);
-
-      const rawTag = (match[1] || 'code').trim();
-      const codeContent = match[2];
-      const artId = `art_${msg.id}_${idx++}`;
-      const lang = rawTag.split(':')[0] || 'code';
-      const title = rawTag.includes(':') ? rawTag.split(':')[1].replace(/_/g, ' ') : `Artefacto ${lang.toUpperCase()}`;
-      const linesCount = codeContent.split('\n').length;
-
-      parts.push(
-        <div
-          key={artId}
-          className="claude-artifact-pill"
-          onClick={() => {
-            setActiveArtifactId(artId);
-            setArtifactPanelOpen(true);
-          }}
-        >
-          <div className="pill-info">
-            <span className="pill-title">🧩 {title}</span>
-            <span className="pill-sub">{lang.toUpperCase()} • {linesCount} linhas • Abrir no painel lateral</span>
-          </div>
-          <button className="pill-btn">Abrir Artefacto ➔</button>
-        </div>
-      );
-
-      lastIndex = regex.lastIndex;
-    }
-
-    const rem = cleanText.slice(lastIndex);
-    if (rem.trim()) parts.push(<div key="rem" className="prose-text">{rem.trim()}</div>);
-    return parts.length > 0 ? parts : <div className="prose-text">{cleanText}</div>;
-  };
-
-  const handleSendManual = () => {
+  const handleSendManual = (e) => {
+    if (e) e.preventDefault();
     const t = inputText.trim();
     if (!t) return;
     setInputText('');
-    stopAllAudio();
-    setGlobalState('PROCESSING');
-    askJarvisLLM(t);
+    askJarvisLLM(t, false);
   };
 
-  const isArtIncomplete =
-    activeArtifact &&
-    !isStreamingArt &&
-    (!activeArtifact.isClosed || (activeArtifact.lang.toLowerCase() === 'html' && !/<\/html>/i.test(activeArtifact.code)));
+  const renderMessageContent = (msg) => {
+    if (msg.role === 'user') return <div className="whitespace-pre-wrap">{msg.content}</div>;
+    const segments = parseMessageSegments(msg.id, msg.content);
+
+    return (
+      <div className="space-y-3">
+        {segments.map((seg, i) => {
+          if (seg.type === 'text') {
+            return (
+              <div key={i} className="whitespace-pre-wrap leading-relaxed text-slate-100">
+                {seg.content}
+              </div>
+            );
+          }
+          if (seg.type === 'artifact') {
+            return (
+              <div
+                key={seg.id || i}
+                className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 hover:border-sky-500/50 transition-colors flex items-center justify-between gap-4"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-sky-400 flex items-center gap-1.5">
+                    <Code2 className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{seg.title}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                    {seg.lang?.toUpperCase()} · {seg.linesCount} linhas · Estúdio Interativo
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveArtifactId(seg.id);
+                    setArtifactPanelOpen(true);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-sky-400 hover:bg-sky-300 text-slate-950 font-semibold text-xs whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Abrir Artefacto →
+                </button>
+              </div>
+            );
+          }
+          if (seg.type === 'pdf') {
+            const media = seg.id ? generatedMediaMap[seg.id] : null;
+            return (
+              <div
+                key={seg.id || i}
+                className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/40 flex items-center justify-between gap-4"
+              >
+                <div className="flex items-center gap-2.5">
+                  <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <div>
+                    <div className="text-xs font-semibold text-emerald-300">{seg.title}</div>
+                    <div className="text-[11px] text-slate-400">Documento pronto para exportação</div>
+                  </div>
+                </div>
+                {media?.url && (
+                  <a
+                    href={media.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-semibold text-xs whitespace-nowrap shrink-0"
+                  >
+                    Abrir Documento
+                  </a>
+                )}
+              </div>
+            );
+          }
+          if (seg.type === 'image') {
+            const media = seg.id ? generatedMediaMap[seg.id] : null;
+            return (
+              <div key={seg.id || i} className="space-y-2">
+                {media?.url ? (
+                  <img
+                    src={media.url}
+                    alt={seg.content}
+                    referrerPolicy="no-referrer"
+                    className="max-w-full rounded-xl border border-slate-800"
+                  />
+                ) : (
+                  <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400 font-mono">
+                    A sintetizar imagem: {seg.content}
+                  </div>
+                )}
+              </div>
+            );
+          }
+          return null;
+        })}
+
+        {msg.groundingSources && msg.groundingSources.length > 0 && (
+          <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center gap-3 text-xs">
+            <span className="text-slate-400">Fontes Web:</span>
+            {msg.groundingSources.map((src, idx) => (
+              <a
+                key={idx}
+                href={src.uri}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sky-400 hover:underline inline-flex items-center gap-1"
+              >
+                <span>{src.title}</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const totalMemoryFacts = memorySections.reduce((acc, s) => acc + s.items.length, 0);
+  const lastAssistantMsg =
+    [...messages].reverse().find((m) => m.role === 'assistant')?.content || '';
 
   return (
-    <>
-      {!booted && (
-        <div className="boot-overlay">
-          <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent)', letterSpacing: '3px' }}>
-            J.A.R.V.I.S. STUDIO (REACT)
-          </div>
-          <p style={{ color: 'var(--muted)', maxWidth: 480, lineHeight: 1.5 }}>
-            Arquitetura React + Vite compatível com <strong>Google AI Studio</strong> e com o teu servidor local <strong>RTX 3060 Ti</strong>.
-          </p>
-          <button className="boot-btn" onClick={bootJarvis}>⚡ INICIAR J.A.R.V.I.S.</button>
-        </div>
-      )}
+    <div className="flex flex-col h-full w-full bg-[#060a12] text-slate-100 select-none">
+      {/* TOP BAR CONTRACT: Strictly 3 Zones separated by gap-8 */}
+      <header className="flex items-center justify-between gap-8 px-5 py-3 bg-slate-950/95 border-b border-slate-800/90 z-30 shrink-0">
+        {/* Zone 1: Single text element wordmark */}
+        <a
+          href="#top"
+          onClick={(e) => {
+            e.preventDefault();
+            setActiveNav('chat');
+          }}
+          className="text-base font-bold tracking-tight text-slate-100 font-display whitespace-nowrap shrink-0"
+        >
+          J.A.R.V.I.S. Studio
+        </a>
 
-      <header>
-        <div className="header-left">
-          <button className="icon-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>☰ Chats</button>
-          <strong style={{ color: 'var(--accent)', fontSize: '0.95rem' }}>J.A.R.V.I.S.</strong>
-          <span className="hw-badge">STT: {metrics.stt}ms | LLM: {metrics.llm}ms | TTS: {metrics.tts}ms</span>
-          <span className="hw-badge">{hwStats}</span>
-        </div>
-        <div className="header-right">
-          <select className="ctrl-select" value={voice} onChange={(e) => setVoice(e.target.value)}>
-            <option value="duarte">🗣️ Voz: Duarte (Natural PT-PT)</option>
-            <option value="raquel">🗣️ Voz: Raquel (Friday PT-PT)</option>
-            <option value="piper">⚡ Voz: Piper (Offline)</option>
-          </select>
-          <button className={`icon-btn ${autoVadMode ? 'active' : ''}`} onClick={() => setAutoVadMode(!autoVadMode)}>
-            {autoVadMode ? '🎙️ Auto' : '👆 PTT'}
+        {/* Zone 2: 4 concise single-line navigation links */}
+        <nav aria-label="Navegação Principal" className="flex items-center gap-6 text-xs font-medium text-slate-400 overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => setActiveNav('chat')}
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
+              activeNav === 'chat'
+                ? 'text-slate-100 border-sky-400 font-semibold'
+                : 'border-transparent hover:text-slate-200'
+            }`}
+          >
+            Conversa & Artefactos
           </button>
-          <button className="icon-btn" onClick={() => setMemoryModalOpen(true)}>🧠 .MD</button>
-          {activeArtifact && (
-            <button className="icon-btn" onClick={() => setArtifactPanelOpen(!artifactPanelOpen)}>🧩 Artefacto</button>
-          )}
+          <button
+            type="button"
+            onClick={() => setActiveNav('voice')}
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
+              activeNav === 'voice'
+                ? 'text-slate-100 border-sky-400 font-semibold'
+                : 'border-transparent hover:text-slate-200'
+            }`}
+          >
+            Modo Voz
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveNav('command')}
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
+              activeNav === 'command'
+                ? 'text-slate-100 border-sky-400 font-semibold'
+                : 'border-transparent hover:text-slate-200'
+            }`}
+          >
+            Rede & Sensores
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveNav('memory')}
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
+              activeNav === 'memory'
+                ? 'text-slate-100 border-sky-400 font-semibold'
+                : 'border-transparent hover:text-slate-200'
+            }`}
+          >
+            Memória Instantânea
+          </button>
+        </nav>
+
+        {/* Zone 3: 1 primary action */}
+        <div className="flex items-center shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveNav('voice');
+              ensureMicrophoneBooted();
+            }}
+            className="px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            Modo Voz Direto
+          </button>
         </div>
       </header>
 
-      <div className="workspace">
-        {sidebarOpen && (
-          <aside className="chat-sidebar">
-            <button className="new-chat-btn" onClick={createNewSession}>+ Nova Conversa</button>
-            <div className="session-list">
-              {sessions.map((s) => (
-                <div
-                  key={s.id}
-                  className={`session-item ${s.id === currentSessionId ? 'active' : ''}`}
-                  onClick={() => {
-                    setCurrentSessionId(s.id);
-                    loadSessionMessages(s.id);
-                    if (window.innerWidth <= 860) setSidebarOpen(false);
-                  }}
-                >
-                  <span className="session-title">💬 {s.title}</span>
-                  <button className="del-chat-btn" onClick={(e) => deleteSession(e, s.id)}>🗑️</button>
+      {/* MAIN WORKSPACE */}
+      <div className="flex-1 flex overflow-hidden relative select-text">
+        {/* VIEW 1: CHAT & CLAUDE ARTIFACT STUDIO */}
+        {activeNav === 'chat' && (
+          <>
+            {/* Collapsible Session Sidebar */}
+            {sidebarOpen && (
+              <aside
+                aria-label="Histórico de Conversas"
+                className="w-64 bg-slate-950 border-r border-slate-800/90 flex flex-col p-3 gap-3 z-30 fixed inset-y-0 left-0 lg:static"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={createNewSession}
+                    className="flex-1 py-2 px-3 rounded-lg bg-sky-400 hover:bg-sky-300 text-slate-950 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Nova Conversa
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Ocultar barra lateral"
+                    onClick={() => setSidebarOpen(false)}
+                    className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 cursor-pointer"
+                  >
+                    <PanelLeft className="w-4 h-4" />
+                  </button>
                 </div>
-              ))}
-            </div>
-          </aside>
+
+                <div className="flex-1 overflow-y-auto space-y-1">
+                  {sessions.map((s) => (
+                    <div
+                      key={s.id}
+                      onClick={() => {
+                        setCurrentSessionId(s.id);
+                        loadSessionMessages(s.id);
+                        if (window.innerWidth <= 960) setSidebarOpen(false);
+                      }}
+                      className={`group px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer transition-colors ${
+                        s.id === currentSessionId
+                          ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30 font-medium'
+                          : 'text-slate-300 hover:bg-slate-900 border border-transparent'
+                      }`}
+                    >
+                      <span className="truncate">{s.title}</span>
+                      <button
+                        type="button"
+                        aria-label={`Apagar conversa ${s.title}`}
+                        onClick={(e) => deleteSession(e, s.id)}
+                        className="opacity-70 hover:opacity-100 text-slate-500 hover:text-rose-400 p-0.5 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Live Telemetry Summary inside Sidebar */}
+                {telemetry && (
+                  <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800/90 space-y-2 text-[11px]">
+                    <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
+                      <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
+                        <CloudSun className="w-3.5 h-3.5 text-sky-400 shrink-0" /> Viana GPS
+                      </span>
+                      <span className="font-mono text-slate-100 tabular-nums truncate">
+                        {telemetry.weather.temperatureC}°C · {telemetry.weather.conditionText}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
+                      <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
+                        <Wifi className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> Router
+                      </span>
+                      <span className="font-mono text-slate-100 tabular-nums">
+                        {telemetry.network.downloadMbps} Mbps · {telemetry.network.pingMs}ms
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
+                      <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
+                        <Server className="w-3.5 h-3.5 text-amber-400 shrink-0" /> RTX 3060 Ti
+                      </span>
+                      <span className="font-mono text-slate-100 tabular-nums">
+                        {telemetry.machines[0]?.vramUsedMb}MB · {telemetry.machines[0]?.tempC}°C
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </aside>
+            )}
+
+            {/* Central Chat Column */}
+            <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+              {/* Sub-toolbar for Workspace Context & Voice Settings */}
+              <div className="px-4 py-2 bg-slate-900/50 border-b border-slate-800/70 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-3">
+                  {!sidebarOpen && (
+                    <button
+                      type="button"
+                      onClick={() => setSidebarOpen(true)}
+                      className="px-2.5 py-1 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <PanelLeft className="w-3.5 h-3.5 text-sky-400" />
+                      Conversas
+                    </button>
+                  )}
+                  <span className="text-slate-400 hidden sm:inline">
+                    {telemetry
+                      ? `${telemetry.weather.locationName}: ${telemetry.weather.temperatureC}°C · Router: ${telemetry.network.downloadMbps} Mbps ↓ (${telemetry.network.pingMs}ms) · ${telemetry.gpuSummary}`
+                      : 'Sensores domésticos sincronizados'}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-slate-400">
+                    <Volume2 className="w-3.5 h-3.5 text-sky-400" />
+                    <select
+                      aria-label="Escolher voz"
+                      value={voice}
+                      onChange={(e) => setVoice(e.target.value)}
+                      className="bg-slate-900 border border-slate-800 text-slate-200 rounded-md px-2 py-1 text-xs focus:outline-none cursor-pointer"
+                    >
+                      <option value="duarte">Voz: Duarte (PT-PT)</option>
+                      <option value="raquel">Voz: Raquel / Friday (PT-PT)</option>
+                      <option value="piper">Voz: Piper (Offline)</option>
+                    </select>
+                  </label>
+
+                  {activeArtifact && (
+                    <button
+                      type="button"
+                      onClick={() => setArtifactPanelOpen(!artifactPanelOpen)}
+                      className="px-2.5 py-1 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-sky-400 font-medium flex items-center gap-1 cursor-pointer"
+                    >
+                      <Code2 className="w-3.5 h-3.5" />
+                      {artifactPanelOpen ? 'Ocultar Artefacto' : 'Abrir Artefacto'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Messages Stream */}
+              <div
+                ref={chatScrollRef}
+                className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 max-w-4xl w-full mx-auto"
+              >
+                {/* Quick Action Starters */}
+                <div className="flex flex-wrap items-center gap-2 pb-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      askJarvisLLM('Como está o tempo hoje em Viana do Castelo e nos próximos dias?', false)
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition-colors cursor-pointer"
+                  >
+                    Meteorologia & GPS em Viana
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      askJarvisLLM(
+                        'Qual é o tráfego atual do router lá de casa, latência ping e estado das máquinas do homelab?',
+                        false
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition-colors cursor-pointer"
+                  >
+                    Tráfego do Router & Máquinas de Casa
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      askJarvisLLM(
+                        'Lembra-te que o servidor backup do projeto AppRAN corre na porta 8090.',
+                        false
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition-colors cursor-pointer"
+                  >
+                    Testar Memória Instantânea
+                  </button>
+                </div>
+
+                {messages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`animate-msg-in flex flex-col ${
+                      m.role === 'user' ? 'items-end' : 'items-start'
+                    }`}
+                  >
+                    {/* Instant Memory Updated Indicator (ChatGPT Style) */}
+                    {m.memoryUpdated && m.memoryUpdated.length > 0 && (
+                      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-amber-300 font-medium">
+                        <Brain className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Memória Instantânea Atualizada · {m.memoryUpdated[0]}</span>
+                      </div>
+                    )}
+
+                    <div
+                      className={`rounded-2xl px-4 py-3 text-sm max-w-[90%] sm:max-w-[84%] ${
+                        m.role === 'user'
+                          ? 'bg-sky-600 text-white rounded-br-sm'
+                          : 'bg-slate-900/85 border border-slate-800/90 text-slate-100 w-full'
+                      }`}
+                    >
+                      {renderMessageContent(m)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Bottom Voice + Text Input Bar */}
+              <footer className="px-4 py-3 bg-slate-950/95 border-t border-slate-800/90">
+                <div className="max-w-4xl mx-auto flex items-center gap-3">
+                  {/* Mini Reactive Canvas Voice Orb */}
+                  <div className="shrink-0 flex items-center gap-2">
+                    <FluidVoiceOrb
+                      state={jarvisState}
+                      analyserRef={analyserRef}
+                      size={48}
+                      onClick={handleOrbClick}
+                      ariaLabel="Ativar ou interromper voz do J.A.R.V.I.S."
+                    />
+                    {jarvisState === 'SPEAKING' && (
+                      <button
+                        type="button"
+                        aria-label="Parar reprodução de voz"
+                        onClick={stopAllAudio}
+                        className="p-2 rounded-lg bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 cursor-pointer"
+                      >
+                        <Square className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Status + Non-React 60fps Volume Meter */}
+                  <div className="hidden md:flex flex-col gap-1 w-48 shrink-0">
+                    <div className="text-[11px] text-slate-400 truncate">
+                      {liveTranscript ? `“${liveTranscript}”` : statusText}
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden relative">
+                      <div
+                        ref={volBarDomRef}
+                        className="h-full bg-sky-400 transition-[width] duration-75"
+                        style={{ width: '0%' }}
+                      />
+                      <div
+                        className="absolute top-0 bottom-0 w-0.5 bg-amber-400"
+                        style={{ left: `${threshold}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Text Input Form */}
+                  <form onSubmit={handleSendManual} className="flex-1 flex items-center gap-2">
+                    <input
+                      type="text"
+                      aria-label="Mensagem para o J.A.R.V.I.S."
+                      placeholder="Pergunta pelo tempo, GPS, tráfego do router, estado das máquinas ou pede código..."
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      className="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                    />
+                    <button
+                      type="submit"
+                      aria-label="Enviar mensagem"
+                      className="px-4 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>Enviar</span>
+                    </button>
+                  </form>
+                </div>
+              </footer>
+            </main>
+
+            {/* Split-Screen Claude Artifact Drawer */}
+            <ArtifactDrawer
+              artifact={activeArtifact}
+              isOpen={artifactPanelOpen}
+              onClose={() => setArtifactPanelOpen(false)}
+              activeTab={artTab}
+              setActiveTab={setArtTab}
+              consoleOutput={artConsole}
+              isStreaming={isStreamingArt}
+              onRunArtifact={runCurrentArtifact}
+              onContinueCutArtifact={continueCutArtifact}
+              codeScrollRef={codeScrollRef}
+            />
+          </>
         )}
 
-        <main className="chat-column">
-          <div className="chat-scroll" ref={chatScrollRef}>
-            {messages.map((m) => (
-              <div key={m.id} className={`msg ${m.role === 'user' ? 'user' : 'ai'}`}>
-                {renderMessageContent(m)}
-              </div>
-            ))}
-          </div>
-        </main>
+        {/* VIEW 2: CHATGPT LIVE VOICE MODE */}
+        {activeNav === 'voice' && (
+          <ChatGptVoiceView
+            jarvisState={jarvisState}
+            statusText={statusText}
+            liveTranscript={liveTranscript}
+            lastAssistantReply={lastAssistantMsg}
+            voice={voice}
+            setVoice={setVoice}
+            speed={speed}
+            setSpeed={setSpeed}
+            autoVadMode={autoVadMode}
+            setAutoVadMode={setAutoVadMode}
+            threshold={threshold}
+            setThreshold={setThreshold}
+            analyserRef={analyserRef}
+            onOrbClick={handleOrbClick}
+            onStopAudio={stopAllAudio}
+            onQuickVoicePrompt={(prompt) => askJarvisLLM(prompt, true)}
+            telemetry={telemetry}
+            memoryFactsCount={totalMemoryFacts}
+          />
+        )}
 
-        {artifactPanelOpen && activeArtifact && (
-          <section className="artifact-panel">
-            <div className="art-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <strong style={{ color: 'var(--accent)', fontSize: '0.88rem' }}>
-                  🧩 {activeArtifact.title} ({activeArtifact.lang.toUpperCase()})
-                </strong>
-                <div className="art-tabs">
-                  <button className={`art-tab ${artTab === 'code' ? 'active' : ''}`} onClick={() => setArtTab('code')}>💻 Código</button>
-                  <button className={`art-tab ${artTab === 'preview' ? 'active' : ''}`} onClick={() => setArtTab('preview')}>👁️ Preview</button>
-                  <button className={`art-tab ${artTab === 'run' ? 'active' : ''}`} onClick={runCurrentArtifact}>▶️ Executar</button>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {isArtIncomplete && (
-                  <button className="icon-btn" style={{ background: '#f59e0b', color: '#000', border: 'none' }} onClick={continueCutArtifact}>
-                    ⏩ Continuar Código
-                  </button>
-                )}
-                <button className="icon-btn" onClick={() => navigator.clipboard.writeText(activeArtifact.code)}>📋 Copiar</button>
-                <button className="icon-btn" style={{ color: 'var(--rec)' }} onClick={() => setArtifactPanelOpen(false)}>✕</button>
-              </div>
-            </div>
-            <div className="art-body">
-              {artTab === 'code' && (
-                <pre className="art-code-view" ref={codeScrollRef}>
-                  <code>{activeArtifact.code}</code>
-                </pre>
-              )}
-              {artTab === 'preview' && (
-                <iframe
-                  className="art-preview-frame"
-                  sandbox="allow-scripts allow-modals allow-same-origin"
-                  srcDoc={buildSafePreviewHtml(activeArtifact)}
-                  title="Artifact Preview"
-                />
-              )}
-              {artTab === 'run' && <div className="art-console-view">{artConsole}</div>}
-            </div>
-          </section>
+        {/* VIEW 3: COMMAND CENTER (WEATHER/GPS, ROUTER TRAFFIC, HOMELAB MACHINES) */}
+        {activeNav === 'command' && (
+          <CommandCenterView
+            telemetry={telemetry}
+            onRefreshTelemetry={refreshTelemetry}
+            onUpdateLocation={async (lat, lon, name) => {
+              const r = await fetch('/telemetry/location', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ latitude: lat, longitude: lon, locationName: name })
+              });
+              if (r.ok) setTelemetry(await r.json());
+            }}
+            onRunSpeedTest={async () => {
+              const r = await fetch('/telemetry/network/speedtest', { method: 'POST' });
+              if (r.ok) {
+                const d = await r.json();
+                if (d.telemetry) setTelemetry(d.telemetry);
+              }
+            }}
+            onMachineAction={async (machineId, action) => {
+              const r = await fetch('/telemetry/homelab/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ machineId, action })
+              });
+              if (r.ok) {
+                const d = await r.json();
+                if (d.telemetry) setTelemetry(d.telemetry);
+                return d.message || '';
+              }
+              return '';
+            }}
+            onAskJarvisAbout={(prompt) => {
+              setActiveNav('chat');
+              askJarvisLLM(prompt, true);
+            }}
+          />
+        )}
+
+        {/* VIEW 4: INSTANT MEMORY ENGINE & ARCHITECTURE PLAN */}
+        {activeNav === 'memory' && (
+          <InstantMemoryView
+            coreMemoryMd={coreMemoryMd}
+            setCoreMemoryMd={setCoreMemoryMd}
+            sections={memorySections}
+            corrections={corrections}
+            recentExtractions={recentExtractions}
+            onSaveMarkdown={async (md) => {
+              try {
+                const r = await fetch('/memory/save', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ markdown: md })
+                });
+                if (r.ok) {
+                  const d = await r.json();
+                  if (d.markdown) setCoreMemoryMd(d.markdown);
+                }
+              } catch {
+                localStorage.setItem('jarvis_fallback_md', md);
+              }
+            }}
+            onTestInstantExtraction={async (sentence) => {
+              const r = await fetch('/memory/extract', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_text: sentence, ai_text: '' })
+              });
+              if (r.ok) {
+                const d = await r.json();
+                if (d.markdown) setCoreMemoryMd(d.markdown);
+                if (d.recentExtractions) setRecentExtractions(d.recentExtractions);
+              }
+            }}
+            onLearnWord={async (wrong, right) => {
+              const r = await fetch('/memory/learn_word', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wrong, right })
+              });
+              if (r.ok) {
+                const d = await r.json();
+                if (d.corrections) setCorrections(d.corrections);
+              }
+            }}
+            onDeleteWord={async (wrong) => {
+              const r = await fetch('/memory/delete_word', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wrong })
+              });
+              if (r.ok) {
+                const d = await r.json();
+                if (d.corrections) setCorrections(d.corrections);
+              }
+            }}
+          />
         )}
       </div>
-
-      {memoryModalOpen && (
-        <div className="memory-modal">
-          <div className="modal-box">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <strong style={{ color: 'var(--accent)' }}>🧠 Memória Persistente (core_memory.md)</strong>
-              <button className="icon-btn" onClick={() => setMemoryModalOpen(false)}>✕ Fechar</button>
-            </div>
-            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: '0.82rem', background: 'var(--card)', padding: 10, borderRadius: 8 }}>
-              <label>
-                Sensibilidade Microfone:
-                <input type="range" min="4" max="40" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} style={{ verticalAlign: 'middle', marginLeft: 6 }} />
-              </label>
-              <label>
-                Velocidade Voz:
-                <select className="ctrl-select" value={speed} onChange={(e) => setSpeed(Number(e.target.value))} style={{ marginLeft: 6 }}>
-                  <option value={1.0}>1.0x (Natural)</option>
-                  <option value={1.08}>1.08x</option>
-                  <option value={1.15}>1.15x</option>
-                </select>
-              </label>
-            </div>
-            <textarea className="memory-editor" value={coreMemoryMd} onChange={(e) => setCoreMemoryMd(e.target.value)} spellCheck={false} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', gap: 6, flex: 1 }}>
-                <input
-                  type="text"
-                  placeholder="Ouvido errado (ex: jarbas)"
-                  value={wrongWord}
-                  onChange={(e) => setWrongWord(e.target.value)}
-                  style={{ flex: 1, padding: 7, borderRadius: 6, background: '#050811', color: '#fff', border: '1px solid var(--border)' }}
-                />
-                <input
-                  type="text"
-                  placeholder="Correto (ex: Jarvis)"
-                  value={rightWord}
-                  onChange={(e) => setRightWord(e.target.value)}
-                  style={{ flex: 1, padding: 7, borderRadius: 6, background: '#050811', color: '#fff', border: '1px solid var(--border)' }}
-                />
-                <button
-                  className="icon-btn"
-                  onClick={async () => {
-                    if (!wrongWord || !rightWord) return;
-                    await fetch('/memory/learn_word', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ wrong: wrongWord, right: rightWord })
-                    });
-                    setWrongWord('');
-                    setRightWord('');
-                  }}
-                >
-                  + Ensinar
-                </button>
-              </div>
-              <button
-                className="icon-btn"
-                style={{ background: '#10b981', color: '#000', border: 'none' }}
-                onClick={async () => {
-                  await fetch('/memory/save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ markdown: coreMemoryMd })
-                  }).catch(() => localStorage.setItem('jarvis_fallback_md', coreMemoryMd));
-                  setMemoryModalOpen(false);
-                }}
-              >
-                💾 Guardar .MD
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <footer>
-        <div className="hud-row">
-          <div className={`orb ${jarvisState.toLowerCase()}`} onClick={handleOrbClick}>
-            {jarvisState === 'SPEAKING' ? '🔊' : jarvisState === 'RECORDING' ? '🔴' : jarvisState === 'PROCESSING' ? '⏳' : autoVadMode ? '🎙️' : '👆'}
-          </div>
-          <div className="meter-wrap">
-            <div className="status-label">{statusText}</div>
-            <div className="vol-bar-bg">
-              <div className="vol-bar" style={{ width: `${micVolume}%` }} />
-              <div className="thresh-line" style={{ left: `${threshold}%` }} />
-            </div>
-          </div>
-          <div className="input-group">
-            <input
-              type="text"
-              className="text-input"
-              placeholder="Escreve ou fala com o Jarvis..."
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSendManual()}
-            />
-            <button className="send-btn" onClick={handleSendManual}>➤</button>
-          </div>
-        </div>
-      </footer>
-    </>
+    </div>
   );
 }
