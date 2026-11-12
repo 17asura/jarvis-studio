@@ -35,7 +35,7 @@ export const RtxOptimizerView: React.FC<RtxOptimizerViewProps> = ({
   const activeModel: RtxModelProfile =
     RTX_3060_TI_MODELS.find((m) => m.id === selectedModelId) || RTX_3060_TI_MODELS[0];
 
-  const [customNCpuMoe, setCustomNCpuMoe] = useState<number>(activeModel.defaultNCpuMoe || 26);
+  const [customNCpuMoe, setCustomNCpuMoe] = useState<number>(activeModel.defaultNCpuMoe || 34);
   const [customCtx, setCustomCtx] = useState<number>(activeModel.defaultCtx || 16384);
   const [kvType, setKvType] = useState<'q8_0' | 'q4_0' | 'f16'>(activeModel.kvCacheType || 'q8_0');
   const [copiedCmd, setCopiedCmd] = useState(false);
@@ -68,7 +68,7 @@ export const RtxOptimizerView: React.FC<RtxOptimizerViewProps> = ({
   };
 
   const vramSegments = [
-    { label: 'OS & Display', mb: allocation.osAndDisplayMb, color: 'bg-slate-600' },
+    { label: 'Linux Mint & Display', mb: allocation.osAndDisplayMb, color: 'bg-slate-600' },
     { label: 'Atenção & Router (GPU)', mb: allocation.attentionAndSharedWeightsMb, color: 'bg-sky-500' },
     ...(allocation.hotMoeExpertsVramMb > 0
       ? [{ label: 'Hot MoE Experts (GPU)', mb: allocation.hotMoeExpertsVramMb, color: 'bg-blue-600' }]
@@ -148,11 +148,13 @@ export const RtxOptimizerView: React.FC<RtxOptimizerViewProps> = ({
               </div>
 
               <div className="text-right font-mono">
-                <div className="text-lg font-bold text-sky-400 tabular-nums">
+                <div className={`text-lg font-bold tabular-nums ${allocation.isOomRisk ? 'text-rose-400' : 'text-sky-400'}`}>
                   {allocation.usedVramMb} / 8192 MB
                 </div>
-                <div className="text-[11px] text-emerald-400 tabular-nums">
-                  {allocation.freeVramMb} MB Margem Livre Anti-OOM
+                <div className={`text-[11px] tabular-nums ${allocation.isOomRisk ? 'text-rose-400 font-semibold' : 'text-emerald-400'}`}>
+                  {allocation.isOomRisk
+                    ? 'ALERTA OOM: Sobe --n-cpu-moe para 34–35!'
+                    : `${allocation.freeVramMb} MB Margem Livre Anti-OOM`}
                 </div>
               </div>
             </div>
@@ -197,14 +199,14 @@ export const RtxOptimizerView: React.FC<RtxOptimizerViewProps> = ({
                   <input
                     type="range"
                     aria-label="Camadas MoE em CPU"
-                    min={22}
-                    max={38}
+                    min={30}
+                    max={40}
                     value={customNCpuMoe}
                     onChange={(e) => setCustomNCpuMoe(Number(e.target.value))}
                     className="w-full accent-sky-400 cursor-pointer"
                   />
                   <div className="text-[11px] text-slate-400">
-                    Ótimo 3060 Ti: <strong className="text-sky-300">26</strong> (vs 35 antigo = +8 camadas GPU)
+                    Seguro RTX 3060 Ti: <strong className="text-sky-300">34–35</strong> (&lt;33 excede 8GB VRAM)
                   </div>
                 </div>
               ) : (

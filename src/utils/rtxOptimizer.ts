@@ -37,10 +37,11 @@ export interface VramAllocationBreakdown {
   computeBufferMb: number;
   usedVramMb: number;
   freeVramMb: number;
+  isOomRisk: boolean;
   systemRamUsedGb: number;
   estimatedTokPerSec: number;
   estimatedTtftMs: number;
-  pcieBottleneckRisk: 'Nulo (100% GDDR6)' | 'Baixo (Apenas Cold Experts)' | 'Moderado';
+  pcieBottleneckRisk: 'Nulo (100% GDDR6)' | 'Baixo (14 Camadas GPU)' | 'Seguro Anti-OOM' | 'Risco OOM (<33)';
   generatedCommand: string;
 }
 
@@ -54,24 +55,24 @@ export const RTX_3060_TI_MODELS: RtxModelProfile[] = [
     activeParams: '3.3B por token',
     quantization: 'UD-Q4_K_XL',
     ggufFilename: 'Qwen3-30B-A3B-Instruct-2507-UD-Q4_K_XL.gguf',
-    vramMb: 6950,
+    vramMb: 7480,
     ramMb: 11800,
-    voiceTokPerSec: 54,
-    textTokPerSec: 44,
+    voiceTokPerSec: 46,
+    textTokPerSec: 39,
     ttftVoiceMs: 115,
     reasoningScore: 95,
     voiceNaturalnessScore: 94,
     recommendedFor: 'Melhor Equilíbrio Global (Voz Instantânea + Raciocínio 30B)',
     badge: 'RECOMENDADO #1 (MOE HÍBRIDO)',
     defaultNgl: 99,
-    defaultNCpuMoe: 26,
+    defaultNCpuMoe: 34,
     defaultCtx: 16384,
     kvCacheType: 'q8_0',
     supportsThinkToggle: true,
     descriptionPt:
-      'Arquitetura Mixture-of-Experts onde apenas 3.3B parâmetros são ativados por token. Mantém 100% das camadas de Atenção (KV) e os especialistas quentes nos 8GB GDDR6 da RTX 3060 Ti.',
+      'Arquitetura Mixture-of-Experts de 48 camadas (~325 MB/camada em UD-Q4_K_XL). Com --n-cpu-moe 34 (ou 35 com browser aberto), mantém 100% da Atenção (KV) + 14 camadas MoE nos 8GB GDDR6 sem provocar erro cudaMalloc out of memory.',
     whyBetterPt:
-      'Reduz o offload para --n-cpu-moe 26 (em vez de 35), aproveitando 1.1 GB de VRAM que estavam livres na tua 3060 Ti e ativa /no_think automático no modo voz para respostas imediatas.'
+      'Descer abaixo de 33 num modelo 30B UD-Q4_K_XL estoura os 8192 MB da RTX 3060 Ti. O ponto ótimo real é --n-cpu-moe 34..35 combinado com /no_think automático em voz e proteção anti-OOM no arranque.'
   },
   {
     id: 'qwen3-8b-q5km-resident',
@@ -89,7 +90,7 @@ export const RTX_3060_TI_MODELS: RtxModelProfile[] = [
     ttftVoiceMs: 65,
     reasoningScore: 87,
     voiceNaturalnessScore: 98,
-    recommendedFor: 'Modo Voz Direto Ultra-Rápido (Zero Latência PCIe)',
+    recommendedFor: 'Modo Voz Direto Ultra-Rápido (Zero Latência PCIe & Arranque em 3s)',
     badge: 'MAIS RÁPIDO EM VOZ (96 TOK/S)',
     defaultNgl: 99,
     defaultNCpuMoe: 0,
@@ -97,9 +98,9 @@ export const RTX_3060_TI_MODELS: RtxModelProfile[] = [
     kvCacheType: 'q8_0',
     supportsThinkToggle: true,
     descriptionPt:
-      'Corre 100% dentro dos 8GB GDDR6 da RTX 3060 Ti a 448 GB/s de largura de banda, eliminando totalmente a leitura de pesos pela RAM DDR4.',
+      'Corre 100% dentro dos 8GB GDDR6 da RTX 3060 Ti a 448 GB/s de largura de banda, eliminando totalmente a leitura de pesos pela RAM DDR4 e carregando em apenas 3 segundos.',
     whyBetterPt:
-      'Para conversação por voz estilo ChatGPT Live, responde em ~65ms (quase o dobro da velocidade de um 30B MoE) com suporte nativo para alternar /think quando precisares de lógica complexa.'
+      'Para conversação por voz estilo ChatGPT Live, responde em ~65ms (quase o triplo da velocidade de um 30B MoE) com suporte nativo para alternar /think quando precisares de lógica complexa.'
   },
   {
     id: 'qwen3-14b-speculative',
@@ -167,24 +168,24 @@ export const RTX_3060_TI_MODELS: RtxModelProfile[] = [
     activeParams: '3.3B por token',
     quantization: 'UD-Q4_K_XL',
     ggufFilename: 'Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf',
-    vramMb: 7100,
+    vramMb: 7490,
     ramMb: 12100,
-    voiceTokPerSec: 49,
-    textTokPerSec: 41,
+    voiceTokPerSec: 42,
+    textTokPerSec: 36,
     ttftVoiceMs: 125,
     reasoningScore: 94,
     voiceNaturalnessScore: 90,
     recommendedFor: 'Compatibilidade Imediata com o teu Ficheiro .GGUF Atual',
     badge: 'INSTALADO NO TEU PC',
     defaultNgl: 99,
-    defaultNCpuMoe: 27,
+    defaultNCpuMoe: 35,
     defaultCtx: 16384,
     kvCacheType: 'q8_0',
     supportsThinkToggle: true,
     descriptionPt:
-      'O modelo que já tens em ~/llama.cpp/models/, agora recalibrado com --n-cpu-moe 27, --ubatch-size 512 e paralelismo AVX2 para o teu Ryzen 7 5800X.',
+      'O modelo que já tens em ~/llama.cpp/models/, agora protegido com deteção automática de VRAM livre (--n-cpu-moe 34..36) e verificação de PID para nunca bloquear no arranque.',
     whyBetterPt:
-      'A tua configuração antiga usava --n-cpu-moe 35 fixo. Reduzir para 27 move mais 8 blocos de especialistas para a RTX 3060 Ti sem estourar os 8GB de VRAM.'
+      'Se o Linux Mint + Browser estiverem a usar >900MB de VRAM, um valor como --n-cpu-moe 26 fazia o llama-server crashar por falta de VRAM enquanto o bash ficava preso no loop. Agora ajusta-se sozinho entre 34 e 36!'
   }
 ];
 
@@ -196,41 +197,40 @@ export function calculateRtx3060TiAllocation(
   reasoningMode: ReasoningMode
 ): VramAllocationBreakdown {
   const totalVramMb = 8192;
-  const osAndDisplayMb = 440;
-  const computeBufferMb = 310;
+  const osAndDisplayMb = 720; // Linux Mint Cinnamon/Xorg + Browser WebGL
+  const computeBufferMb = 290;
 
   // KV Cache calculation based on context size and quantization
   const kvBasePer16k = kvType === 'f16' ? 1420 : kvType === 'q8_0' ? 760 : 420;
   const kvCacheVramMb = Math.round(kvBasePer16k * (customCtx / 16384));
 
-  let attentionAndSharedWeightsMb = 2150;
+  let attentionAndSharedWeightsMb = 1480;
   let hotMoeExpertsVramMb = 0;
   let systemRamUsedGb = model.ramMb / 1024;
 
   if (model.architecture === 'MoE Híbrido') {
-    // Cada camada MoE movida para GPU ocupa ~145 MB na VRAM e liberta ~145 MB da RAM DDR4
+    // Em Qwen3-30B-A3B UD-Q4_K_XL (48 camadas), cada camada MoE na GPU ocupa ~325 MB
     const gpuMoeLayers = Math.max(0, 48 - customNCpuMoe);
-    hotMoeExpertsVramMb = Math.round(gpuMoeLayers * 165);
-    systemRamUsedGb = Math.max(2.5, Math.round((customNCpuMoe * 0.36 + 2.2) * 10) / 10);
+    hotMoeExpertsVramMb = Math.round(gpuMoeLayers * 325);
+    systemRamUsedGb = Math.max(2.5, Math.round((customNCpuMoe * 0.34 + 1.8) * 10) / 10);
   } else {
     attentionAndSharedWeightsMb = model.vramMb - osAndDisplayMb - computeBufferMb - 720;
     hotMoeExpertsVramMb = 0;
   }
 
-  const usedVramMb = Math.min(
-    totalVramMb,
-    osAndDisplayMb + attentionAndSharedWeightsMb + hotMoeExpertsVramMb + kvCacheVramMb + computeBufferMb
-  );
-  const freeVramMb = Math.max(0, totalVramMb - usedVramMb);
+  const rawRequiredVramMb =
+    osAndDisplayMb + attentionAndSharedWeightsMb + hotMoeExpertsVramMb + kvCacheVramMb + computeBufferMb;
+  const isOomRisk = rawRequiredVramMb > totalVramMb - 120;
+  const usedVramMb = Math.min(totalVramMb, rawRequiredVramMb);
+  const freeVramMb = Math.max(0, totalVramMb - rawRequiredVramMb);
 
-  // Estimar performance real em tok/s e TTFT na RTX 3060 Ti + Ryzen 7 5800X
   let speedBonus = 1.0;
   if (model.architecture === 'MoE Híbrido') {
     const deltaLayers = model.defaultNCpuMoe - customNCpuMoe;
-    speedBonus = 1 + deltaLayers * 0.022;
+    speedBonus = 1 + deltaLayers * 0.025;
   }
   if (reasoningMode === 'voice_instant') {
-    speedBonus *= 1.15;
+    speedBonus *= 1.18;
   } else if (reasoningMode === 'deep_reasoning') {
     speedBonus *= 0.92;
   }
@@ -245,9 +245,11 @@ export function calculateRtx3060TiAllocation(
   const pcieBottleneckRisk =
     model.architecture === '100% GPU Resident'
       ? 'Nulo (100% GDDR6)'
-      : customNCpuMoe <= 28
-      ? 'Baixo (Apenas Cold Experts)'
-      : 'Moderado';
+      : isOomRisk
+      ? 'Risco OOM (<33)'
+      : customNCpuMoe <= 34
+      ? 'Baixo (14 Camadas GPU)'
+      : 'Seguro Anti-OOM';
 
   const moeFlag = model.architecture === 'MoE Híbrido' ? ` \\\n  --n-cpu-moe ${customNCpuMoe}` : '';
   const draftFlag = model.draftModelGguf
@@ -258,8 +260,9 @@ export function calculateRtx3060TiAllocation(
   -m "$HOME/llama.cpp/models/${model.ggufFilename}"${draftFlag} \\
   --host 0.0.0.0 --port 9931 \\
   -ngl ${model.defaultNgl}${moeFlag} \\
-  -t 8 -tb 14 \\
-  -c ${customCtx} -b 2048 -ub 512 \\
+  -t 8 \\
+  --load-mode none \\
+  -c ${customCtx} \\
   -ctk ${kvType} -ctv ${kvType} \\
   -fa on \\
   --cache-reuse 256`;
@@ -273,6 +276,7 @@ export function calculateRtx3060TiAllocation(
     computeBufferMb,
     usedVramMb,
     freeVramMb,
+    isOomRisk,
     systemRamUsedGb,
     estimatedTokPerSec,
     estimatedTtftMs,

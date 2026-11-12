@@ -76,14 +76,17 @@ test('shouldFlushSpeechChunk flushes first clause early at >= 8 chars on comma f
   assert.equal(shouldFlushSpeechChunk('Olá', 'á', true), false);
 });
 
-test('calculateRtx3060TiAllocation computes exact 8192MB VRAM budget and CLI flags', () => {
+test('calculateRtx3060TiAllocation computes exact 8192MB VRAM budget, OOM protection, and CLI flags', () => {
   const moeModel = RTX_3060_TI_MODELS[0];
-  const alloc = calculateRtx3060TiAllocation(moeModel, 26, 16384, 'q8_0', 'voice_instant');
-  assert.equal(alloc.totalVramMb, 8192);
-  assert.ok(alloc.usedVramMb <= 8192);
-  assert.ok(alloc.freeVramMb >= 0);
-  assert.ok(alloc.generatedCommand.includes('--n-cpu-moe 26'));
-  assert.ok(alloc.estimatedTokPerSec >= 50);
+  const safeAlloc = calculateRtx3060TiAllocation(moeModel, 34, 16384, 'q8_0', 'voice_instant');
+  assert.equal(safeAlloc.totalVramMb, 8192);
+  assert.equal(safeAlloc.isOomRisk, false);
+  assert.ok(safeAlloc.usedVramMb <= 8192);
+  assert.ok(safeAlloc.freeVramMb > 150);
+  assert.ok(safeAlloc.generatedCommand.includes('--n-cpu-moe 34'));
+
+  const oomAlloc = calculateRtx3060TiAllocation(moeModel, 26, 16384, 'q8_0', 'voice_instant');
+  assert.equal(oomAlloc.isOomRisk, true);
 });
 
 test('parseMessageSegments extracts text, code artifacts, pdf, and image blocks', () => {

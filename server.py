@@ -617,14 +617,25 @@ async def run_code_sandbox(req: CodeRunRequest):
 # ============================================================================
 @app.post("/llm")
 async def proxy_llm(request: Request):
-    body = await request.body()
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body)
+        is_voice = bool(payload.pop("voiceMode", False))
+        reasoning_mode = payload.pop("reasoningMode", "hybrid_smart")
+        msgs = payload.get("messages", [])
+        if (is_voice or reasoning_mode in ("voice_instant", "fast_voice")) and msgs:
+            if msgs[-1].get("role") == "user" and "/no_think" not in msgs[-1].get("content", ""):
+                msgs[-1]["content"] = "/no_think\n" + msgs[-1]["content"]
+        clean_body = json.dumps(payload).encode("utf-8")
+    except Exception:
+        clean_body = raw_body
 
     async def stream_from_llama():
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=600)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
                 LLM_API_URL,
-                data=body,
+                data=clean_body,
                 headers={"Content-Type": "application/json"}
             ) as resp:
                 async for chunk in resp.content.iter_any():
