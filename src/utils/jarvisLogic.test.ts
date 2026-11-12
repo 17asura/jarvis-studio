@@ -4,11 +4,16 @@ import {
   extractInstantMemories,
   applyPhoneticCorrections,
   prepareTextForNaturalSpeech,
+  shouldFlushSpeechChunk,
   parseMessageSegments,
   parseMemorySections,
   buildSystemPromptWithLiveContext,
   DEFAULT_MEMORY_MD
 } from './jarvisLogic';
+import {
+  RTX_3060_TI_MODELS,
+  calculateRtx3060TiAllocation
+} from './rtxOptimizer';
 
 test('extractInstantMemories extracts explicit memory commands and categorizes them', () => {
   const input = 'Jarvis, lembra-te que o servidor backup corre na porta 8090 e como está o tempo?';
@@ -55,13 +60,30 @@ test('applyPhoneticCorrections replaces longest match first case-insensitively',
   assert.equal(corrected, 'Olá Jarvis, ajuda-me no projeto de C# para o IPCA');
 });
 
-test('prepareTextForNaturalSpeech cleans code blocks and expands technical acronyms', () => {
-  const raw = 'Aqui está o código C# na RTX 3060 Ti a 450 Mbps:\n```csharp\nConsole.WriteLine();\n```';
+test('prepareTextForNaturalSpeech cleans code blocks and humanizes units and acronyms', () => {
+  const raw = 'Estão 16.5°C e o código C# na RTX 3060 Ti corre a 450 Mbps (5ms):\n```csharp\nConsole.WriteLine();\n```';
   const spoken = prepareTextForNaturalSpeech(raw);
+  assert.ok(spoken.includes('16 vírgula 5 graus'));
   assert.ok(spoken.includes('C Sharp'));
   assert.ok(spoken.includes('R T X 30 60 T I'));
   assert.ok(spoken.includes('megabits por segundo'));
+  assert.ok(spoken.includes('5 milissegundos'));
   assert.ok(!spoken.includes('Console.WriteLine'));
+});
+
+test('shouldFlushSpeechChunk flushes first clause early at >= 8 chars on comma for fast voice TTFA', () => {
+  assert.equal(shouldFlushSpeechChunk('Olha, Dinis,', ',', true), true);
+  assert.equal(shouldFlushSpeechChunk('Olá', 'á', true), false);
+});
+
+test('calculateRtx3060TiAllocation computes exact 8192MB VRAM budget and CLI flags', () => {
+  const moeModel = RTX_3060_TI_MODELS[0];
+  const alloc = calculateRtx3060TiAllocation(moeModel, 26, 16384, 'q8_0', 'voice_instant');
+  assert.equal(alloc.totalVramMb, 8192);
+  assert.ok(alloc.usedVramMb <= 8192);
+  assert.ok(alloc.freeVramMb >= 0);
+  assert.ok(alloc.generatedCommand.includes('--n-cpu-moe 26'));
+  assert.ok(alloc.estimatedTokPerSec >= 50);
 });
 
 test('parseMessageSegments extracts text, code artifacts, pdf, and image blocks', () => {
@@ -84,8 +106,11 @@ test('parseMemorySections parses markdown sections and items accurately', () => 
   assert.ok(sections[0].items.some((item) => item.includes('Dinis')));
 });
 
-test('buildSystemPromptWithLiveContext injects weather, router, and homelab telemetry', () => {
-  const prompt = buildSystemPromptWithLiveContext('Como está o router?', DEFAULT_MEMORY_MD, null);
-  assert.ok(prompt.includes('Português de Portugal'));
+test('buildSystemPromptWithLiveContext injects voice mode prosody when active', () => {
+  const prompt = buildSystemPromptWithLiveContext('Como está o router?', DEFAULT_MEMORY_MD, null, {
+    isVoiceMode: true,
+    selectedModelName: 'Qwen3-8B-Instruct (100% VRAM Resident)'
+  });
+  assert.ok(prompt.includes('MODO VOZ DIRETO ATIVO'));
   assert.ok(prompt.includes('Dinis Portela Sousa'));
 });

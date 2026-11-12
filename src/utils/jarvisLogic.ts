@@ -360,6 +360,19 @@ export function prepareTextForNaturalSpeech(text: string): string {
     .replace(/```[\s\S]*?```/g, '');
 
   const replacements: Array<[RegExp, string]> = [
+    [/(\d+)\.(\d+)\s*°C\b/gi, '$1 vírgula $2 graus'],
+    [/(\d+)\s*°C\b/gi, '$1 graus'],
+    [/(\d+)\.(\d+)\s*%/g, '$1 vírgula $2 por cento'],
+    [/(\d+)\s*%/g, '$1 por cento'],
+    [/(\d+)\.(\d+)\s*Mbps\b/gi, '$1 vírgula $2 megabits por segundo'],
+    [/(\d+)\.(\d+)\s*Gbps\b/gi, '$1 vírgula $2 gigabits por segundo'],
+    [/(\d+)\.(\d+)\s*GB\b/gi, '$1 vírgula $2 gigabytes'],
+    [/(\d+)\s*GB\b/gi, '$1 gigabytes'],
+    [/(\d+)\s*MB\b/gi, '$1 megabytes'],
+    [/(\d+)\.(\d+)\s*ms\b/gi, '$1 vírgula $2 milissegundos'],
+    [/(\d+)\s*ms\b/gi, '$1 milissegundos'],
+    [/(\d+)\.(\d+)\s*km\/h\b/gi, '$1 vírgula $2 quilómetros por hora'],
+    [/(\d+)\s*km\/h\b/gi, '$1 quilómetros por hora'],
     [/\bC#/gi, 'C Sharp'],
     [/\.NET\b/gi, 'Dot Net'],
     [/\bSQLite\b/gi, 'S Q Lite'],
@@ -370,11 +383,14 @@ export function prepareTextForNaturalSpeech(text: string): string {
     [/\bCPU\b/gi, 'C P U'],
     [/\bVRAM\b/gi, 'V Ram'],
     [/\bRTX 3060 Ti\b/gi, 'R T X 30 60 T I'],
+    [/\bMoE\b/g, 'M o E'],
     [/\bAppRAN\b/gi, 'App Rã'],
     [/\bMbps\b/gi, 'megabits por segundo'],
     [/\bGbps\b/gi, 'gigabits por segundo'],
     [/\.md\b/gi, ' Markdown'],
-    [/\bJSON\b/gi, 'Jason']
+    [/\bJSON\b/gi, 'Jason'],
+    [/↓/g, 'de download'],
+    [/↑/g, 'de upload']
   ];
 
   for (const [pat, rep] of replacements) {
@@ -382,6 +398,26 @@ export function prepareTextForNaturalSpeech(text: string): string {
   }
   t = t.replace(/[*#_`~>|]/g, '');
   return t.replace(/\s+/g, ' ').trim();
+}
+
+export function shouldFlushSpeechChunk(
+  sentenceBuffer: string,
+  latestToken: string,
+  isFirstChunk: boolean
+): boolean {
+  const trimmedLen = sentenceBuffer.trim().length;
+  if (trimmedLen < 6) return false;
+
+  if (isFirstChunk) {
+    // No primeiro bloco de voz, dispara logo na primeira pausa curta (>= 8 chars) para latência < 180ms
+    if (trimmedLen >= 8 && /[,.;:!?\n—-]/.test(latestToken)) return true;
+    if (trimmedLen >= 34 && /\s/.test(latestToken)) return true;
+    return false;
+  }
+
+  if (trimmedLen >= 26 && /[.;:!?\n]/.test(latestToken)) return true;
+  if (trimmedLen >= 48 && /[,—-]/.test(latestToken)) return true;
+  return false;
 }
 
 export function parseMessageSegments(msgId: string, rawContent: string): ParsedMessageSegment[] {
@@ -450,14 +486,24 @@ export function parseMessageSegments(msgId: string, rawContent: string): ParsedM
   return segments.length > 0 ? segments : [{ type: 'text', content: cleanText }];
 }
 
+export interface PromptContextOptions {
+  isVoiceMode?: boolean;
+  selectedModelName?: string;
+  reasoningMode?: 'voice_instant' | 'hybrid_smart' | 'deep_reasoning';
+}
+
 export function buildSystemPromptWithLiveContext(
   userText: string,
   memoryMd: string,
-  telemetry: FullSystemTelemetry | null
+  telemetry: FullSystemTelemetry | null,
+  options?: PromptContextOptions
 ): string {
   const lower = (userText || '').toLowerCase();
   const wantsPdf = /\b(pdf|documento pdf|gera um pdf|cria um pdf|exporta para pdf)\b/.test(lower);
   const wantsImage = /\b(gera uma imagem|cria uma imagem|desenha uma imagem|gera uma foto|cria uma foto)\b/.test(lower);
+  const isVoice = options?.isVoiceMode ?? false;
+  const activeEngine = options?.selectedModelName || 'Qwen3-30B-A3B-Instruct-2507 (Turbo MoE)';
+  const rMode = options?.reasoningMode || (isVoice ? 'voice_instant' : 'hybrid_smart');
 
   let telemetrySection = '';
   if (telemetry) {
@@ -475,6 +521,7 @@ export function buildSystemPromptWithLiveContext(
     telemetrySection = `
 TELEMETRIA EM TEMPO REAL (INTERNET, METEOROLOGIA/GPS, ROUTER & MÁQUINAS DE CASA):
 - Data/Hora Atual: ${new Date().toLocaleString('pt-PT')}
+- Motor AI Ativo na RTX 3060 Ti: ${activeEngine} (Modo: ${rMode})
 - Localização GPS & Meteorologia (${w.locationName} [${w.latitude.toFixed(4)}, ${w.longitude.toFixed(4)}]):
   * Estado: ${w.conditionText}, Temperatura: ${w.temperatureC}°C (Sensação: ${w.apparentTemperatureC}°C)
   * Humidade: ${w.humidityPercent}%, Vento: ${w.windSpeedKmh} km/h, Precipitação: ${w.precipitationMm} mm
@@ -487,21 +534,29 @@ ${machinesList}
 `;
   }
 
-  let prompt = `O teu nome é J.A.R.V.I.S. És o assistente pessoal de voz, inteligência artificial e centro de comando doméstico do Dinis.
+  const voiceHumanInstruction = isVoice
+    ? `\nMODO VOZ DIRETO ATIVO (PROSÓDIA HUMANA ULTRA-RÁPIDA):
+- Estás a falar em voz alta com o Dinis em tempo real. Sê caloroso, expressivo, espontâneo e 100% humano!
+- Começa com uma expressão curta seguida de vírgula (ex: "Olha, Dinis,", "Ora bem,", "Claro,", "Deixa-me ver aqui,") para que o motor de voz comece a falar em menos de 150ms.
+- NUNCA uses listas com bullets, asteriscos ou formatação robótica quando falas; liga as ideias numa frase corrida, natural e direta (1 a 2 frases curtas).`
+    : `\nESTILO DE CONVERSAÇÃO HUMANA:
+- Fala como um parceiro de engenharia próximo, perspicaz e natural em Português de Portugal (PT-PT), sem soar a assistente robótico.`;
+
+  let prompt = `O teu nome é J.A.R.V.I.S. És o parceiro pessoal de voz, inteligência artificial e centro de comando doméstico do Dinis.
+${voiceHumanInstruction}
 
 REGRAS DE OURO:
-1. Fala SEMPRE em Português de Portugal (PT-PT) de forma natural, fluida, inteligente e direta (estilo assistente de voz avançado como o ChatGPT Voice).
-2. Tens acesso total em tempo real aos sensores de meteorologia/GPS, ao router doméstico (tráfego, ping, dispositivos na rede), às máquinas lá de casa (Shad3-PC com RTX 3060 Ti, Ubuntu-Homelab shad3.dev, VivoBook-15, S24-Ultra) e à internet. Quando o Dinis perguntar pelo tempo, rede, router ou máquinas, responde com os valores exatos da secção TELEMETRIA EM TEMPO REAL abaixo.
-3. Em conversa normal ou por voz, sê conciso (1 a 3 frases claras e naturais) para que a síntese de voz seja imediata.
-4. ARTEFACTOS DE CÓDIGO (ESTILO CLAUDE): Quando o Dinis pedir código ou uma página HTML/3D, diz primeiro 1 frase curta introdutória e coloca o código COMPLETO dentro de \`\`\`linguagem:Titulo_Do_Artefacto ... \`\`\`.
+1. Fala SEMPRE em Português de Portugal (PT-PT) autêntico, humano, fluido e natural.
+2. Tens acesso total em tempo real aos sensores de meteorologia/GPS, ao router doméstico (tráfego, ping, dispositivos na rede), às máquinas lá de casa (Shad3-PC com RTX 3060 Ti, Ubuntu-Homelab shad3.dev, VivoBook-15, S24-Ultra) e à internet.
+3. ARTEFACTOS DE CÓDIGO (ESTILO CLAUDE): Quando o Dinis pedir código ou uma página HTML/3D, diz primeiro 1 frase curta introdutória e coloca o código COMPLETO dentro de \`\`\`linguagem:Titulo_Do_Artefacto ... \`\`\`.
    - REGRA CRÍTICA PARA HTML/WEB: Escreve SEMPRE o ficheiro completo até ao \`</html>\` final!
-5. PROIBIDO CRIAR PDFs OU IMAGENS NÃO SOLICITADOS: NUNCA uses blocos \`\`\`pdf nem \`\`\`image a menos que o Dinis tenha pedido explicitamente na mensagem atual.`;
+4. PROIBIDO CRIAR PDFs OU IMAGENS NÃO SOLICITADOS: NUNCA uses blocos \`\`\`pdf nem \`\`\`image a menos que o Dinis tenha pedido explicitamente na mensagem atual.`;
 
   if (wantsPdf) {
-    prompt += `\n6. O DINIS PEDIU UM PDF AGORA: Inclui o documento num bloco \`\`\`pdf:Titulo_Do_PDF\nConteúdo...\n\`\`\`.`;
+    prompt += `\n5. O DINIS PEDIU UM PDF AGORA: Inclui o documento num bloco \`\`\`pdf:Titulo_Do_PDF\nConteúdo...\n\`\`\`.`;
   }
   if (wantsImage) {
-    prompt += `\n6. O DINIS PEDIU UMA IMAGEM AGORA: Inclui a descrição visual num bloco \`\`\`image\nDescrição detalhada...\n\`\`\`.`;
+    prompt += `\n5. O DINIS PEDIU UMA IMAGEM AGORA: Inclui a descrição visual num bloco \`\`\`image\nDescrição detalhada...\n\`\`\`.`;
   }
 
   prompt += `\n${telemetrySection}\nMEMÓRIA PERSISTENTE INSTANTÂNEA DO DINIS (core_memory.md):\n${memoryMd || DEFAULT_MEMORY_MD}`;

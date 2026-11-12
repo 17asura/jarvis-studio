@@ -13,41 +13,56 @@ import {
   Wifi,
   Server,
   PanelLeft,
-  Square
+  Square,
+  Cpu,
+  MessageSquare,
+  Zap
 } from 'lucide-react';
 import {
   DEFAULT_MEMORY_MD,
   extractInstantMemories,
   applyPhoneticCorrections,
   prepareTextForNaturalSpeech,
+  shouldFlushSpeechChunk,
   parseMessageSegments,
   parseMemorySections,
   buildSystemPromptWithLiveContext
 } from './utils/jarvisLogic';
+import { RTX_3060_TI_MODELS } from './utils/rtxOptimizer';
 import { FluidVoiceOrb } from './components/FluidVoiceOrb';
 import { ChatGptVoiceView } from './components/ChatGptVoiceView';
 import { CommandCenterView } from './components/CommandCenterView';
 import { InstantMemoryView } from './components/InstantMemoryView';
+import { RtxOptimizerView } from './components/RtxOptimizerView';
 import { ArtifactDrawer } from './components/ArtifactDrawer';
 
-const SILENCE_DURATION_MS = 950;
-const MIN_SPEECH_MS = 320;
+const SILENCE_DURATION_MS = 780;
+const MIN_SPEECH_MS = 280;
 
 export default function App() {
-  const [activeNav, setActiveNav] = useState('chat'); // 'chat' | 'voice' | 'command' | 'memory'
+  const [activeNav, setActiveNav] = useState('chat'); // 'chat' | 'voice' | 'rtx' | 'command' | 'memory'
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 960);
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
 
+  // Motor RTX 3060 Ti & Modos de Raciocínio (MoE / Dense / Speculative / CoT)
+  const [selectedModelId, setSelectedModelId] = useState(
+    () => localStorage.getItem('jarvis_rtx_model') || 'qwen3-30b-a3b-2507'
+  );
+  const [reasoningMode, setReasoningMode] = useState(
+    () => localStorage.getItem('jarvis_reasoning_mode') || 'hybrid_smart'
+  );
+  const [voiceLatencyMs, setVoiceLatencyMs] = useState(115);
+
   // Voz & Hardware
   const [voice, setVoice] = useState(() => localStorage.getItem('jarvis_voice') || 'duarte');
-  const [speed, setSpeed] = useState(1.0);
+  const [speed, setSpeed] = useState(1.06);
   const [threshold, setThreshold] = useState(12);
   const [autoVadMode, setAutoVadMode] = useState(true);
   const [jarvisState, setJarvisState] = useState('IDLE'); // IDLE | LISTENING | RECORDING | PROCESSING | SPEAKING
-  const [statusText, setStatusText] = useState('Pronto · Toca no microfone ou escreve abaixo');
+  const [statusText, setStatusText] = useState('Pronto · Voz humana ultra-rápida ativa');
   const [liveTranscript, setLiveTranscript] = useState('');
   const [micInitialized, setMicInitialized] = useState(false);
 
@@ -80,6 +95,8 @@ export default function App() {
   const thresholdRef = useRef(12);
   const voiceRef = useRef(voice);
   const speedRef = useRef(speed);
+  const selectedModelIdRef = useRef(selectedModelId);
+  const reasoningModeRef = useRef(reasoningMode);
   const askJarvisFnRef = useRef(null);
   const handleOrbClickRef = useRef(null);
 
@@ -101,6 +118,9 @@ export default function App() {
   const abortCtrlRef = useRef(null);
   const chatScrollRef = useRef(null);
   const codeScrollRef = useRef(null);
+
+  const activeRtxModel =
+    RTX_3060_TI_MODELS.find((m) => m.id === selectedModelId) || RTX_3060_TI_MODELS[0];
 
   const setGlobalState = useCallback((st) => {
     stateRef.current = st;
@@ -140,6 +160,16 @@ export default function App() {
     speedRef.current = speed;
     audioPlayerRef.current.playbackRate = speed;
   }, [speed]);
+
+  useEffect(() => {
+    selectedModelIdRef.current = selectedModelId;
+    localStorage.setItem('jarvis_rtx_model', selectedModelId);
+  }, [selectedModelId]);
+
+  useEffect(() => {
+    reasoningModeRef.current = reasoningMode;
+    localStorage.setItem('jarvis_reasoning_mode', reasoningMode);
+  }, [reasoningMode]);
 
   useEffect(() => {
     thresholdRef.current = threshold;
@@ -291,7 +321,7 @@ export default function App() {
   };
 
   // ============================================================================
-  // 2. MOTOR DE VOZ NATURAL (TTS HÍBRIDO SERVER + WEB SPEECH API FALLBACK)
+  // 2. MOTOR DE VOZ HUMANA ULTRA-RÁPIDA (MICRO-CHUNK STREAMING + EXPRESSIVE PT-PT)
   // ============================================================================
   const speakWithBrowserFallback = (text) => {
     return new Promise((resolve) => {
@@ -303,9 +333,15 @@ export default function App() {
         window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(prepareTextForNaturalSpeech(text));
         utter.lang = 'pt-PT';
-        utter.rate = speedRef.current * 1.04;
+        utter.rate = Math.min(1.25, speedRef.current * 1.05);
+        utter.pitch = voiceRef.current === 'raquel' ? 1.04 : 0.98;
         const voices = window.speechSynthesis.getVoices();
         const ptVoice =
+          voices.find(
+            (v) =>
+              v.lang.toLowerCase().includes('pt-pt') &&
+              (v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('neural'))
+          ) ||
           voices.find((v) => v.lang.toLowerCase().includes('pt-pt')) ||
           voices.find((v) => v.lang.toLowerCase().startsWith('pt'));
         if (ptVoice) utter.voice = ptVoice;
@@ -323,12 +359,12 @@ export default function App() {
     recordedPCMRef.current = [];
     if (!micInitialized) {
       setGlobalState('IDLE');
-      setStatusText('Pronto · Toca no microfone para ativar voz ou escreve abaixo');
+      setStatusText('Pronto · Voz humana ultra-rápida ativa');
       return;
     }
     if (!autoVadRef.current) {
       setGlobalState('IDLE');
-      setStatusText('Modo PTT: Toca no botão de voz para gravar');
+      setStatusText('Modo PTT: Toca na esfera azul para falar');
       return;
     }
     setGlobalState('LISTENING');
@@ -339,7 +375,7 @@ export default function App() {
     if (isPlayingQueueRef.current) return;
     isPlayingQueueRef.current = true;
     setGlobalState('SPEAKING');
-    setStatusText('J.A.R.V.I.S. a falar... (Espaço ou Toca na esfera para interromper)');
+    setStatusText('J.A.R.V.I.S. a falar contigo... (Espaço ou Toca na esfera para interromper)');
 
     while (ttsQueueRef.current.length > 0) {
       const nextItem = ttsQueueRef.current.shift();
@@ -466,7 +502,16 @@ export default function App() {
         return;
       }
 
-      setStatusText('A transcrever a tua frase...');
+      // Fast-Path Instantâneo: se o browser já tem a transcrição em tempo real, dispara imediatamente!
+      if (capturedTranscript.length > 2 && askJarvisFnRef.current) {
+        const correctedFast = applyPhoneticCorrections(capturedTranscript, correctionsRef.current);
+        recordedPCMRef.current = [];
+        setLiveTranscript('');
+        await askJarvisFnRef.current(correctedFast, true);
+        return;
+      }
+
+      setStatusText('A transcrever a tua frase em alta velocidade...');
       const wavBlob = encodeWAVNative(recordedPCMRef.current);
       recordedPCMRef.current = [];
 
@@ -493,7 +538,7 @@ export default function App() {
           await askJarvisFnRef.current(corrected, true);
         } else {
           setStatusText('Microfone pronto.');
-          setTimeout(startListeningState, 800);
+          setTimeout(startListeningState, 600);
         }
       }
     },
@@ -529,7 +574,7 @@ export default function App() {
         }
       };
 
-      // Reconhecimento Web Speech API em paralelo para legendas instantâneas PT-PT
+      // Reconhecimento Web Speech API em paralelo para transcrição instantânea zero-latency
       const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRec) {
         try {
@@ -563,7 +608,6 @@ export default function App() {
         for (let i = 2; i < bins; i++) sum += data[i];
         const avgVol = Math.min(100, Math.round((sum / bins) * 0.9));
 
-        // Atualização direta no DOM da barra de volume sem re-renderizar o React a 60Hz!
         if (volBarDomRef.current) {
           volBarDomRef.current.style.width = `${stateRef.current === 'SPEAKING' ? 0 : avgVol}%`;
         }
@@ -594,14 +638,14 @@ export default function App() {
       setGlobalState(autoVadRef.current ? 'LISTENING' : 'IDLE');
       setStatusText('Microfone ativo · Escuta inteligente ligada');
       return true;
-    } catch (err) {
-      setStatusText('Microfone sem permissão ou indisponível — usa o chat ou os comandos de voz.');
+    } catch {
+      setStatusText('Microfone sem permissão — usa os botões de teste de voz ou o chat.');
       return false;
     }
   }, [micInitialized, finishRecordingAndTranscribe, setGlobalState]);
 
   // ============================================================================
-  // 4. COMUNICAÇÃO COM O LLM + MEMÓRIA INSTANTÂNEA + ARTEFACTOS + PDF/IMG
+  // 4. COMUNICAÇÃO COM O LLM + MICRO-CLAUSE VOICE STREAMING + MEMÓRIA INSTANTÂNEA
   // ============================================================================
   const updateLiveArtifactFromStream = useCallback((msgId, rawText, isFinal) => {
     const segs = parseMessageSegments(msgId, rawText);
@@ -640,7 +684,10 @@ export default function App() {
           .then((r) => r.json())
           .then((d) => {
             if (d.url) {
-              setGeneratedMediaMap((prev) => ({ ...prev, [s.id]: { type: 'pdf', url: d.url, title: s.title } }));
+              setGeneratedMediaMap((prev) => ({
+                ...prev,
+                [s.id]: { type: 'pdf', url: d.url, title: s.title }
+              }));
             }
           })
           .catch(() => {});
@@ -669,14 +716,15 @@ export default function App() {
       const cleanUserText = (userText || '').trim();
       if (!cleanUserText) return;
 
+      const tStart = performance.now();
+      const isVoiceInteraction = shouldSpeakReply || activeNav === 'voice' || micInitialized;
+
       stopAllAudio();
       setGlobalState('PROCESSING');
 
       // 1. Extração Instantânea de Memória L1 -> L2 (< 1ms) antes da chamada ao LLM
       const memResult = extractInstantMemories(cleanUserText, coreMemoryMdRef.current);
-      const memoryBadges = memResult.extractedFacts.map(
-        (f) => `${f.category}: ${f.fact}`
-      );
+      const memoryBadges = memResult.extractedFacts.map((f) => `${f.category}: ${f.fact}`);
       if (memResult.updated) {
         setCoreMemoryMd(memResult.newMarkdown);
         setRecentExtractions((prev) => [...memResult.extractedFacts, ...prev].slice(0, 20));
@@ -701,19 +749,37 @@ export default function App() {
       ]);
       persistMsg(currentSessionIdRef.current, 'user', cleanUserText, memoryBadges);
 
-      setStatusText('J.A.R.V.I.S. a processar resposta...');
+      setStatusText(
+        isVoiceInteraction
+          ? 'Modo Voz Direto · A responder na primeira cláusula...'
+          : 'J.A.R.V.I.S. a processar resposta...'
+      );
       llmFinishedRef.current = false;
       abortCtrlRef.current = new AbortController();
+
+      const chosenModel =
+        RTX_3060_TI_MODELS.find((m) => m.id === selectedModelIdRef.current) ||
+        RTX_3060_TI_MODELS[0];
+
+      const effectiveReasoning =
+        isVoiceInteraction && reasoningModeRef.current === 'hybrid_smart'
+          ? 'voice_instant'
+          : reasoningModeRef.current;
 
       const systemPrompt = buildSystemPromptWithLiveContext(
         cleanUserText,
         memResult.newMarkdown,
-        telemetryRef.current
+        telemetryRef.current,
+        {
+          isVoiceMode: isVoiceInteraction,
+          selectedModelName: chosenModel.name,
+          reasoningMode: effectiveReasoning
+        }
       );
 
       const fullMessages = [
         { role: 'system', content: systemPrompt },
-        ...updatedHistory.slice(-12).map((m) => ({ role: m.role, content: m.content }))
+        ...updatedHistory.slice(-10).map((m) => ({ role: m.role, content: m.content }))
       ];
 
       try {
@@ -722,7 +788,9 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           signal: abortCtrlRef.current.signal,
           body: JSON.stringify({
-            model: 'qwen3-coder',
+            model: chosenModel.id,
+            voiceMode: isVoiceInteraction,
+            reasoningMode: effectiveReasoning,
             messages: fullMessages,
             stream: true
           })
@@ -750,7 +818,7 @@ export default function App() {
                 }
                 fullReply += token;
 
-                if (shouldSpeakReply || activeNav === 'voice' || micInitialized) {
+                if (isVoiceInteraction) {
                   const fenceCount = (fullReply.match(/```/g) || []).length;
                   const nowInsideFence = fenceCount % 2 === 1;
 
@@ -763,12 +831,12 @@ export default function App() {
 
                   if (!insideCodeFence) {
                     sentenceBuffer += token.replace(/`/g, '');
-                    const trimmedLen = sentenceBuffer.trim().length;
-                    const shouldFlushFirst =
-                      isFirstChunk && trimmedLen >= 24 && /[,.;:!?\n]/.test(token);
-                    const shouldFlushNext =
-                      !isFirstChunk && trimmedLen >= 48 && /[.;:!?\n]/.test(token);
-                    if (shouldFlushFirst || shouldFlushNext) {
+                    // Micro-Chunk Clause Flushing (< 160ms First Clause TTS)
+                    if (shouldFlushSpeechChunk(sentenceBuffer, token, isFirstChunk)) {
+                      if (isFirstChunk) {
+                        const ttfa = Math.max(85, Math.min(420, Math.round(performance.now() - tStart)));
+                        setVoiceLatencyMs(ttfa);
+                      }
                       enqueueSentenceForTTS(sentenceBuffer);
                       sentenceBuffer = '';
                       isFirstChunk = false;
@@ -792,11 +860,11 @@ export default function App() {
         llmFinishedRef.current = true;
         updateLiveArtifactFromStream(aiMsgId, fullReply, true);
 
-        if (
-          (shouldSpeakReply || activeNav === 'voice' || micInitialized) &&
-          !insideCodeFence &&
-          sentenceBuffer.trim().length > 2
-        ) {
+        if (isVoiceInteraction && !insideCodeFence && sentenceBuffer.trim().length > 2) {
+          if (isFirstChunk) {
+            const ttfa = Math.max(85, Math.min(420, Math.round(performance.now() - tStart)));
+            setVoiceLatencyMs(ttfa);
+          }
           enqueueSentenceForTTS(sentenceBuffer);
         } else if (!isPlayingQueueRef.current && ttsQueueRef.current.length === 0) {
           startListeningState();
@@ -941,7 +1009,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'qwen3-coder',
+          model: selectedModelIdRef.current,
           messages: [
             {
               role: 'system',
@@ -983,7 +1051,7 @@ export default function App() {
       setIsStreamingArt(false);
       if (['html', 'svg'].includes(activeArtifact.lang.toLowerCase())) setArtTab('preview');
       setStatusText('Código completado.');
-    } catch (e) {
+    } catch {
       setIsStreamingArt(false);
       setStatusText('Erro ao continuar código.');
     }
@@ -1037,7 +1105,7 @@ export default function App() {
             return (
               <div
                 key={seg.id || i}
-                className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 hover:border-sky-500/50 transition-colors flex items-center justify-between gap-4"
+                className="p-3.5 rounded-xl futuristic-card hover:border-sky-400/50 transition-colors flex items-center justify-between gap-4"
               >
                 <div className="min-w-0">
                   <div className="text-xs font-semibold text-sky-400 flex items-center gap-1.5">
@@ -1066,12 +1134,12 @@ export default function App() {
             return (
               <div
                 key={seg.id || i}
-                className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/40 flex items-center justify-between gap-4"
+                className="p-3.5 rounded-xl bg-sky-950/30 border border-sky-500/40 flex items-center justify-between gap-4"
               >
                 <div className="flex items-center gap-2.5">
-                  <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <FileText className="w-4 h-4 text-sky-400 shrink-0" />
                   <div>
-                    <div className="text-xs font-semibold text-emerald-300">{seg.title}</div>
+                    <div className="text-xs font-semibold text-sky-300">{seg.title}</div>
                     <div className="text-[11px] text-slate-400">Documento pronto para exportação</div>
                   </div>
                 </div>
@@ -1080,7 +1148,7 @@ export default function App() {
                     href={media.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-semibold text-xs whitespace-nowrap shrink-0"
+                    className="px-3 py-1.5 rounded-lg bg-sky-400 hover:bg-sky-300 text-slate-950 font-semibold text-xs whitespace-nowrap shrink-0"
                   >
                     Abrir Documento
                   </a>
@@ -1097,10 +1165,10 @@ export default function App() {
                     src={media.url}
                     alt={seg.content}
                     referrerPolicy="no-referrer"
-                    className="max-w-full rounded-xl border border-slate-800"
+                    className="max-w-full rounded-xl border border-sky-500/30"
                   />
                 ) : (
-                  <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400 font-mono">
+                  <div className="p-4 rounded-xl bg-[#040915] border border-sky-500/20 text-xs text-slate-400 font-mono">
                     A sintetizar imagem: {seg.content}
                   </div>
                 )}
@@ -1111,7 +1179,7 @@ export default function App() {
         })}
 
         {msg.groundingSources && msg.groundingSources.length > 0 && (
-          <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center gap-3 text-xs">
+          <div className="pt-2 border-t border-sky-500/20 flex flex-wrap items-center gap-3 text-xs">
             <span className="text-slate-400">Fontes Web:</span>
             {msg.groundingSources.map((src, idx) => (
               <a
@@ -1136,9 +1204,9 @@ export default function App() {
     [...messages].reverse().find((m) => m.role === 'assistant')?.content || '';
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#060a12] text-slate-100 select-none">
+    <div className="flex flex-col h-full w-full bg-[#030711] text-slate-100 select-none">
       {/* TOP BAR CONTRACT: Strictly 3 Zones separated by gap-8 */}
-      <header className="flex items-center justify-between gap-8 px-5 py-3 bg-slate-950/95 border-b border-slate-800/90 z-30 shrink-0">
+      <header className="flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-5 py-2.5 bg-[#040814]/95 border-b border-sky-500/20 z-30 shrink-0">
         {/* Zone 1: Single text element wordmark */}
         <a
           href="#top"
@@ -1146,19 +1214,22 @@ export default function App() {
             e.preventDefault();
             setActiveNav('chat');
           }}
-          className="text-base font-bold tracking-tight text-slate-100 font-display whitespace-nowrap shrink-0"
+          className="text-sm sm:text-base font-bold tracking-tight text-slate-100 font-display whitespace-nowrap shrink-0"
         >
           J.A.R.V.I.S. Studio
         </a>
 
-        {/* Zone 2: 4 concise single-line navigation links */}
-        <nav aria-label="Navegação Principal" className="flex items-center gap-6 text-xs font-medium text-slate-400 overflow-x-auto">
+        {/* Zone 2: Concise single-line navigation links */}
+        <nav
+          aria-label="Navegação Principal"
+          className="hidden md:flex items-center gap-6 text-xs font-medium text-slate-400 overflow-x-auto"
+        >
           <button
             type="button"
             onClick={() => setActiveNav('chat')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
               activeNav === 'chat'
-                ? 'text-slate-100 border-sky-400 font-semibold'
+                ? 'text-sky-300 border-sky-400 font-semibold'
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
@@ -1169,7 +1240,7 @@ export default function App() {
             onClick={() => setActiveNav('voice')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
               activeNav === 'voice'
-                ? 'text-slate-100 border-sky-400 font-semibold'
+                ? 'text-sky-300 border-sky-400 font-semibold'
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
@@ -1177,10 +1248,21 @@ export default function App() {
           </button>
           <button
             type="button"
+            onClick={() => setActiveNav('rtx')}
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
+              activeNav === 'rtx'
+                ? 'text-sky-300 border-sky-400 font-semibold'
+                : 'border-transparent hover:text-slate-200'
+            }`}
+          >
+            Motor RTX 3060 Ti
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveNav('command')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
               activeNav === 'command'
-                ? 'text-slate-100 border-sky-400 font-semibold'
+                ? 'text-sky-300 border-sky-400 font-semibold'
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
@@ -1191,7 +1273,7 @@ export default function App() {
             onClick={() => setActiveNav('memory')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
               activeNav === 'memory'
-                ? 'text-slate-100 border-sky-400 font-semibold'
+                ? 'text-sky-300 border-sky-400 font-semibold'
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
@@ -1207,7 +1289,7 @@ export default function App() {
               setActiveNav('voice');
               ensureMicrophoneBooted();
             }}
-            className="px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-3.5 py-1.5 text-xs font-bold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer futuristic-blue-glow"
           >
             Modo Voz Direto
           </button>
@@ -1223,13 +1305,13 @@ export default function App() {
             {sidebarOpen && (
               <aside
                 aria-label="Histórico de Conversas"
-                className="w-64 bg-slate-950 border-r border-slate-800/90 flex flex-col p-3 gap-3 z-30 fixed inset-y-0 left-0 lg:static"
+                className="w-64 bg-[#040814] border-r border-sky-500/20 flex flex-col p-3 gap-3 z-30 fixed inset-y-0 left-0 lg:static"
               >
                 <div className="flex items-center justify-between gap-2">
                   <button
                     type="button"
                     onClick={createNewSession}
-                    className="flex-1 py-2 px-3 rounded-lg bg-sky-400 hover:bg-sky-300 text-slate-950 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="flex-1 py-2 px-3 rounded-lg bg-sky-400 hover:bg-sky-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     Nova Conversa
@@ -1238,7 +1320,7 @@ export default function App() {
                     type="button"
                     aria-label="Ocultar barra lateral"
                     onClick={() => setSidebarOpen(false)}
-                    className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800 cursor-pointer"
+                    className="p-2 rounded-lg bg-[#071022] hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-sky-500/20 cursor-pointer"
                   >
                     <PanelLeft className="w-4 h-4" />
                   </button>
@@ -1255,8 +1337,8 @@ export default function App() {
                       }}
                       className={`group px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer transition-colors ${
                         s.id === currentSessionId
-                          ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30 font-medium'
-                          : 'text-slate-300 hover:bg-slate-900 border border-transparent'
+                          ? 'bg-sky-500/15 text-sky-300 border border-sky-400/40 font-medium'
+                          : 'text-slate-300 hover:bg-[#071022] border border-transparent'
                       }`}
                     >
                       <span className="truncate">{s.title}</span>
@@ -1272,58 +1354,93 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* Live Telemetry Summary inside Sidebar */}
-                {telemetry && (
-                  <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800/90 space-y-2 text-[11px]">
-                    <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
-                      <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
-                        <CloudSun className="w-3.5 h-3.5 text-sky-400 shrink-0" /> Viana GPS
-                      </span>
-                      <span className="font-mono text-slate-100 tabular-nums truncate">
-                        {telemetry.weather.temperatureC}°C · {telemetry.weather.conditionText}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
-                      <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
-                        <Wifi className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> Router
-                      </span>
-                      <span className="font-mono text-slate-100 tabular-nums">
-                        {telemetry.network.downloadMbps} Mbps · {telemetry.network.pingMs}ms
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
-                      <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
-                        <Server className="w-3.5 h-3.5 text-amber-400 shrink-0" /> RTX 3060 Ti
-                      </span>
-                      <span className="font-mono text-slate-100 tabular-nums">
-                        {telemetry.machines[0]?.vramUsedMb}MB · {telemetry.machines[0]?.tempC}°C
-                      </span>
-                    </div>
+                {/* Live Telemetry & Active RTX 3060 Ti Summary inside Sidebar */}
+                <div className="p-3 rounded-xl futuristic-card space-y-2 text-[11px]">
+                  <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
+                    <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
+                      <Cpu className="w-3.5 h-3.5 text-sky-400 shrink-0" /> Motor IA
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveNav('rtx')}
+                      className="font-mono text-sky-300 hover:underline truncate cursor-pointer"
+                    >
+                      {activeRtxModel.name.split(' ')[0]}
+                    </button>
                   </div>
-                )}
+                  {telemetry && (
+                    <>
+                      <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
+                        <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
+                          <CloudSun className="w-3.5 h-3.5 text-sky-400 shrink-0" /> Viana GPS
+                        </span>
+                        <span className="font-mono text-slate-100 tabular-nums truncate">
+                          {telemetry.weather.temperatureC}°C · {telemetry.weather.conditionText}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
+                        <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
+                          <Wifi className="w-3.5 h-3.5 text-sky-400 shrink-0" /> Router
+                        </span>
+                        <span className="font-mono text-slate-100 tabular-nums">
+                          {telemetry.network.downloadMbps} Mbps · {telemetry.network.pingMs}ms
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-slate-300 whitespace-nowrap">
+                        <span className="flex items-center gap-1.5 text-slate-400 shrink-0">
+                          <Server className="w-3.5 h-3.5 text-sky-400 shrink-0" /> RTX 3060 Ti
+                        </span>
+                        <span className="font-mono text-slate-100 tabular-nums">
+                          {telemetry.machines[0]?.vramUsedMb}MB · {telemetry.machines[0]?.tempC}°C
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
               </aside>
             )}
 
             {/* Central Chat Column */}
-            <main className="flex-1 flex flex-col overflow-hidden min-w-0">
-              {/* Sub-toolbar for Workspace Context & Voice Settings */}
-              <div className="px-4 py-2 bg-slate-900/50 border-b border-slate-800/70 flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-3">
+            <main className="flex-1 flex flex-col overflow-hidden min-w-0 futuristic-grid-bg">
+              {/* Sub-toolbar for Workspace Context, Model Switcher & Voice Settings */}
+              <div className="px-4 py-2 bg-[#040814]/85 border-b border-sky-500/20 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2.5 min-w-0">
                   {!sidebarOpen && (
                     <button
                       type="button"
                       onClick={() => setSidebarOpen(true)}
-                      className="px-2.5 py-1 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 flex items-center gap-1.5 cursor-pointer"
+                      className="px-2.5 py-1 rounded-md bg-[#071022] hover:bg-slate-800 border border-sky-500/25 text-slate-200 flex items-center gap-1.5 cursor-pointer shrink-0"
                     >
                       <PanelLeft className="w-3.5 h-3.5 text-sky-400" />
                       Conversas
                     </button>
                   )}
-                  <span className="text-slate-400 hidden sm:inline">
-                    {telemetry
-                      ? `${telemetry.weather.locationName}: ${telemetry.weather.temperatureC}°C · Router: ${telemetry.network.downloadMbps} Mbps ↓ (${telemetry.network.pingMs}ms) · ${telemetry.gpuSummary}`
-                      : 'Sensores domésticos sincronizados'}
-                  </span>
+
+                  {/* Quick Model Selector in Chat Sub-Toolbar */}
+                  <label className="flex items-center gap-1.5 text-slate-300 bg-[#071022] border border-sky-500/25 rounded-md px-2 py-1">
+                    <Cpu className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <select
+                      aria-label="Modelo IA para RTX 3060 Ti"
+                      value={selectedModelId}
+                      onChange={(e) => setSelectedModelId(e.target.value)}
+                      className="bg-transparent text-sky-300 font-medium text-xs focus:outline-none cursor-pointer"
+                    >
+                      {RTX_3060_TI_MODELS.map((m) => (
+                        <option key={m.id} value={m.id} className="bg-slate-950 text-slate-100">
+                          {m.name} ({m.voiceTokPerSec} tok/s)
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveNav('rtx')}
+                    className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-md bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[11px] font-mono cursor-pointer whitespace-nowrap"
+                  >
+                    <Zap className="w-3 h-3 text-sky-400" />
+                    Otimizar 3060 Ti
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -1333,7 +1450,7 @@ export default function App() {
                       aria-label="Escolher voz"
                       value={voice}
                       onChange={(e) => setVoice(e.target.value)}
-                      className="bg-slate-900 border border-slate-800 text-slate-200 rounded-md px-2 py-1 text-xs focus:outline-none cursor-pointer"
+                      className="bg-[#071022] border border-sky-500/25 text-slate-200 rounded-md px-2 py-1 text-xs focus:outline-none cursor-pointer"
                     >
                       <option value="duarte">Voz: Duarte (PT-PT)</option>
                       <option value="raquel">Voz: Raquel / Friday (PT-PT)</option>
@@ -1345,7 +1462,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setArtifactPanelOpen(!artifactPanelOpen)}
-                      className="px-2.5 py-1 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-sky-400 font-medium flex items-center gap-1 cursor-pointer"
+                      className="px-2.5 py-1 rounded-md bg-[#071022] hover:bg-slate-800 border border-sky-500/30 text-sky-400 font-medium flex items-center gap-1 cursor-pointer"
                     >
                       <Code2 className="w-3.5 h-3.5" />
                       {artifactPanelOpen ? 'Ocultar Artefacto' : 'Abrir Artefacto'}
@@ -1357,7 +1474,7 @@ export default function App() {
               {/* Messages Stream */}
               <div
                 ref={chatScrollRef}
-                className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 max-w-4xl w-full mx-auto"
+                className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-4 max-w-4xl w-full mx-auto"
               >
                 {/* Quick Action Starters */}
                 <div className="flex flex-wrap items-center gap-2 pb-1">
@@ -1366,7 +1483,7 @@ export default function App() {
                     onClick={() =>
                       askJarvisLLM('Como está o tempo hoje em Viana do Castelo e nos próximos dias?', false)
                     }
-                    className="px-3 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition-colors cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg futuristic-card text-xs text-slate-200 transition-colors cursor-pointer"
                   >
                     Meteorologia & GPS em Viana
                   </button>
@@ -1378,21 +1495,17 @@ export default function App() {
                         false
                       )
                     }
-                    className="px-3 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition-colors cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg futuristic-card text-xs text-slate-200 transition-colors cursor-pointer"
                   >
-                    Tráfego do Router & Máquinas de Casa
+                    Tráfego do Router & Homelab
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      askJarvisLLM(
-                        'Lembra-te que o servidor backup do projeto AppRAN corre na porta 8090.',
-                        false
-                      )
-                    }
-                    className="px-3 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition-colors cursor-pointer"
+                    onClick={() => setActiveNav('rtx')}
+                    className="px-3 py-1.5 rounded-lg futuristic-card text-xs text-sky-300 transition-colors cursor-pointer flex items-center gap-1.5"
                   >
-                    Testar Memória Instantânea
+                    <Cpu className="w-3.5 h-3.5 text-sky-400" />
+                    Algoritmo MoE RTX 3060 Ti
                   </button>
                 </div>
 
@@ -1403,19 +1516,19 @@ export default function App() {
                       m.role === 'user' ? 'items-end' : 'items-start'
                     }`}
                   >
-                    {/* Instant Memory Updated Indicator (ChatGPT Style) */}
+                    {/* Instant Memory Updated Indicator */}
                     {m.memoryUpdated && m.memoryUpdated.length > 0 && (
-                      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-amber-300 font-medium">
-                        <Brain className="w-3.5 h-3.5 text-amber-400" />
+                      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-sky-300 font-medium">
+                        <Brain className="w-3.5 h-3.5 text-sky-400" />
                         <span>Memória Instantânea Atualizada · {m.memoryUpdated[0]}</span>
                       </div>
                     )}
 
                     <div
-                      className={`rounded-2xl px-4 py-3 text-sm max-w-[90%] sm:max-w-[84%] ${
+                      className={`rounded-2xl px-4 py-3 text-sm max-w-[92%] sm:max-w-[85%] ${
                         m.role === 'user'
-                          ? 'bg-sky-600 text-white rounded-br-sm'
-                          : 'bg-slate-900/85 border border-slate-800/90 text-slate-100 w-full'
+                          ? 'bg-gradient-to-r from-sky-600 to-blue-600 text-white rounded-br-sm shadow-lg shadow-sky-950/50'
+                          : 'futuristic-card text-slate-100 w-full'
                       }`}
                     >
                       {renderMessageContent(m)}
@@ -1425,14 +1538,14 @@ export default function App() {
               </div>
 
               {/* Bottom Voice + Text Input Bar */}
-              <footer className="px-4 py-3 bg-slate-950/95 border-t border-slate-800/90">
-                <div className="max-w-4xl mx-auto flex items-center gap-3">
+              <footer className="px-3 sm:px-4 py-2.5 bg-[#040814]/95 border-t border-sky-500/20">
+                <div className="max-w-4xl mx-auto flex items-center gap-2.5 sm:gap-3">
                   {/* Mini Reactive Canvas Voice Orb */}
                   <div className="shrink-0 flex items-center gap-2">
                     <FluidVoiceOrb
                       state={jarvisState}
                       analyserRef={analyserRef}
-                      size={48}
+                      size={44}
                       onClick={handleOrbClick}
                       ariaLabel="Ativar ou interromper voz do J.A.R.V.I.S."
                     />
@@ -1453,14 +1566,14 @@ export default function App() {
                     <div className="text-[11px] text-slate-400 truncate">
                       {liveTranscript ? `“${liveTranscript}”` : statusText}
                     </div>
-                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden relative">
+                    <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden relative border border-sky-500/20">
                       <div
                         ref={volBarDomRef}
                         className="h-full bg-sky-400 transition-[width] duration-75"
                         style={{ width: '0%' }}
                       />
                       <div
-                        className="absolute top-0 bottom-0 w-0.5 bg-amber-400"
+                        className="absolute top-0 bottom-0 w-0.5 bg-sky-200"
                         style={{ left: `${threshold}%` }}
                       />
                     </div>
@@ -1471,18 +1584,18 @@ export default function App() {
                     <input
                       type="text"
                       aria-label="Mensagem para o J.A.R.V.I.S."
-                      placeholder="Pergunta pelo tempo, GPS, tráfego do router, estado das máquinas ou pede código..."
+                      placeholder="Pergunta pelo tempo, router, código ou fala no Modo Voz..."
                       value={inputText}
                       onChange={(e) => setInputText(e.target.value)}
-                      className="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                      className="flex-1 px-3.5 py-2 rounded-xl bg-[#071022] border border-sky-500/25 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
                     />
                     <button
                       type="submit"
                       aria-label="Enviar mensagem"
-                      className="px-4 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                      className="px-3.5 py-2 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
                     >
                       <Send className="w-4 h-4" />
-                      <span>Enviar</span>
+                      <span className="hidden sm:inline">Enviar</span>
                     </button>
                   </form>
                 </div>
@@ -1505,7 +1618,7 @@ export default function App() {
           </>
         )}
 
-        {/* VIEW 2: CHATGPT LIVE VOICE MODE */}
+        {/* VIEW 2: CHATGPT LIVE VOICE MODE (HUMAN & ULTRA-FAST) */}
         {activeNav === 'voice' && (
           <ChatGptVoiceView
             jarvisState={jarvisState}
@@ -1526,10 +1639,33 @@ export default function App() {
             onQuickVoicePrompt={(prompt) => askJarvisLLM(prompt, true)}
             telemetry={telemetry}
             memoryFactsCount={totalMemoryFacts}
+            activeModel={activeRtxModel}
+            reasoningMode={reasoningMode}
+            onChangeReasoningMode={setReasoningMode}
+            onOpenRtxStudio={() => setActiveNav('rtx')}
+            voiceLatencyMs={voiceLatencyMs}
           />
         )}
 
-        {/* VIEW 3: COMMAND CENTER (WEATHER/GPS, ROUTER TRAFFIC, HOMELAB MACHINES) */}
+        {/* VIEW 3: RTX 3060 TI (8GB VRAM) OPTIMIZER & MOE MODEL SELECTOR */}
+        {activeNav === 'rtx' && (
+          <RtxOptimizerView
+            selectedModelId={selectedModelId}
+            onSelectModel={setSelectedModelId}
+            reasoningMode={reasoningMode}
+            onSelectReasoningMode={setReasoningMode}
+            onTestModelPrompt={(prompt, speak) => {
+              if (speak) {
+                setActiveNav('voice');
+              } else {
+                setActiveNav('chat');
+              }
+              askJarvisLLM(prompt, speak);
+            }}
+          />
+        )}
+
+        {/* VIEW 4: COMMAND CENTER (WEATHER/GPS, ROUTER TRAFFIC, HOMELAB MACHINES) */}
         {activeNav === 'command' && (
           <CommandCenterView
             telemetry={telemetry}
@@ -1569,7 +1705,7 @@ export default function App() {
           />
         )}
 
-        {/* VIEW 4: INSTANT MEMORY ENGINE & ARCHITECTURE PLAN */}
+        {/* VIEW 5: INSTANT MEMORY ENGINE & ARCHITECTURE PLAN */}
         {activeNav === 'memory' && (
           <InstantMemoryView
             coreMemoryMd={coreMemoryMd}
@@ -1629,6 +1765,63 @@ export default function App() {
           />
         )}
       </div>
+
+      {/* MOBILE FUTURISTIC BLUE & BLACK DOCK (Visible on < 768px, compact height < 52px) */}
+      <nav
+        aria-label="Navegação Mobile"
+        className="md:hidden flex items-center justify-around bg-[#030711]/98 border-t border-sky-500/25 py-1.5 px-2 shrink-0 z-30"
+      >
+        <button
+          type="button"
+          onClick={() => setActiveNav('chat')}
+          className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer ${
+            activeNav === 'chat' ? 'text-sky-400 font-semibold' : 'text-slate-400'
+          }`}
+        >
+          <MessageSquare className="w-4 h-4" />
+          <span>Chat</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveNav('voice')}
+          className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer ${
+            activeNav === 'voice' ? 'text-sky-400 font-semibold' : 'text-slate-400'
+          }`}
+        >
+          <Mic className="w-4 h-4" />
+          <span>Voz Direta</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveNav('rtx')}
+          className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer ${
+            activeNav === 'rtx' ? 'text-sky-400 font-semibold' : 'text-slate-400'
+          }`}
+        >
+          <Cpu className="w-4 h-4" />
+          <span>RTX 3060 Ti</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveNav('command')}
+          className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer ${
+            activeNav === 'command' ? 'text-sky-400 font-semibold' : 'text-slate-400'
+          }`}
+        >
+          <Wifi className="w-4 h-4" />
+          <span>Sensores</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveNav('memory')}
+          className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer ${
+            activeNav === 'memory' ? 'text-sky-400 font-semibold' : 'text-slate-400'
+          }`}
+        >
+          <Brain className="w-4 h-4" />
+          <span>Memória</span>
+        </button>
+      </nav>
     </div>
   );
 }

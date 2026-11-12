@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
   DEFAULT_MEMORY_MD,
   extractInstantMemories,
@@ -884,12 +884,22 @@ async function startServer() {
     res.json({ text: '', ms: Math.round(performance.now() - t0) });
   });
 
+  const ttsMemoryCache = new Map<string, Buffer>();
+
   app.post('/tts', async (req: Request, res: Response) => {
     const rawText = String(req.body?.text || '');
     const voice = String(req.body?.voice || 'duarte');
     const spokenText = prepareTextForNaturalSpeech(rawText);
     if (!spokenText) {
       res.status(204).end();
+      return;
+    }
+
+    const cacheKey = `${voice}:${spokenText}`;
+    const cachedWav = ttsMemoryCache.get(cacheKey);
+    if (cachedWav) {
+      res.setHeader('Content-Type', 'audio/wav');
+      res.send(cachedWav);
       return;
     }
 
@@ -906,7 +916,8 @@ async function startServer() {
                 {
                   text: spokenText,
                   speechMetadata: {
-                    style: 'Natural, articulate European Portuguese personal assistant'
+                    style:
+                      'Warm, natural, conversational and expressive European Portuguese (Português de Portugal) friend and personal engineering assistant, fluid cadence'
                   }
                 }
               ]
@@ -925,6 +936,11 @@ async function startServer() {
         const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         if (base64Audio) {
           const wavBuffer = Buffer.from(base64Audio, 'base64');
+          if (ttsMemoryCache.size > 80) {
+            const firstKey = ttsMemoryCache.keys().next().value;
+            if (firstKey) ttsMemoryCache.delete(firstKey);
+          }
+          ttsMemoryCache.set(cacheKey, wavBuffer);
           res.setHeader('Content-Type', 'audio/wav');
           res.send(wavBuffer);
           return;
@@ -938,9 +954,12 @@ async function startServer() {
     res.status(204).end();
   });
 
-  // 6. MOTOR LLM HÍBRIDO (LOCAL LLAMA-SERVER OU GEMINI 3.8 FLASH COM GOOGLE SEARCH GROUNDING + TELEMETRIA)
+  // 6. MOTOR LLM HÍBRIDO (LOCAL LLAMA-SERVER OU GEMINI 3.8 FLASH COM FAST VOICE MODE + TELEMETRIA)
   app.post('/llm', async (req: Request, res: Response) => {
     const messages: Array<{ role: string; content: string }> = req.body?.messages || [];
+    const isVoiceMode = Boolean(req.body?.voiceMode);
+    const reasoningMode = String(req.body?.reasoningMode || 'auto_hybrid');
+    const selectedModel = String(req.body?.model || 'qwen3-30b-a3b-instruct-2507');
     const localUrl = process.env.LOCAL_LLM_URL || 'http://127.0.0.1:9931/v1/chat/completions';
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -958,11 +977,22 @@ async function startServer() {
     // 6.1 Tentar primeiro o llama-server local (se o Dinis estiver a correr na RTX 3060 Ti)
     try {
       const ctrl = new AbortController();
-      const timeoutId = setTimeout(() => ctrl.abort(), 800);
+      const timeoutId = setTimeout(() => ctrl.abort(), isVoiceMode ? 450 : 800);
+      const localPayload = {
+        ...req.body,
+        messages:
+          isVoiceMode || reasoningMode === 'voice_instant' || reasoningMode === 'fast_voice'
+            ? messages.map((m, idx) =>
+                idx === messages.length - 1 && m.role === 'user' && !m.content.includes('/no_think')
+                  ? { ...m, content: `/no_think\n${m.content}` }
+                  : m
+              )
+            : messages
+      };
       const localResp = await fetch(localUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req.body),
+        body: JSON.stringify(localPayload),
         signal: ctrl.signal
       });
       clearTimeout(timeoutId);
@@ -985,7 +1015,7 @@ async function startServer() {
     const conversationMsgs = messages.filter((m) => m.role !== 'system');
     const lastUserMsg = conversationMsgs[conversationMsgs.length - 1]?.content || '';
 
-    // 6.3 Usar Gemini 3.8 Flash Server-Side com Google Search Grounding
+    // 6.3 Usar Gemini 3.8 Flash Server-Side (com ThinkingLevel.LOW em Modo Voz para resposta instantânea!)
     const ai = getGeminiClient();
     if (ai) {
       try {
@@ -994,15 +1024,23 @@ async function startServer() {
           parts: [{ text: m.content }]
         }));
 
-        const needsWebSearch = /\b(notícias|noticias|hoje|atualidade|pesquisa|internet|quem ganhou|preço|cotação|lançamento|2026|2025|resultados|jogo)\b/i.test(
-          lastUserMsg
-        );
+        const needsWebSearch =
+          !isVoiceMode &&
+          /\b(notícias|noticias|atualidade|pesquisa na web|quem ganhou|cotação|resultados do jogo)\b/i.test(
+            lastUserMsg
+          );
+
+        const useLowThinking =
+          isVoiceMode || reasoningMode === 'voice_instant' || reasoningMode === 'fast_voice';
 
         const streamResponse = await ai.models.generateContentStream({
           model: 'gemini-3.8-flash',
           contents: contents.length > 0 ? contents : [{ role: 'user', parts: [{ text: 'Olá Jarvis' }] }],
           config: {
             systemInstruction: systemMsg,
+            thinkingConfig: {
+              thinkingLevel: useLowThinking ? ThinkingLevel.LOW : ThinkingLevel.HIGH
+            },
             ...(needsWebSearch ? { tools: [{ googleSearch: {} }] } : {})
           }
         });
@@ -1036,7 +1074,7 @@ async function startServer() {
       }
     }
 
-    // 6.4 Resposta inteligente local baseada na telemetria viva e memória (caso sem chave externa)
+    // 6.4 Resposta humana ultra-rápida baseada na telemetria viva, memória e otimizador RTX 3060 Ti
     const w = telemetry.weather;
     const net = telemetry.network;
     const shad3 = telemetry.machines.find((m) => m.id === 'shad3-pc');
@@ -1044,22 +1082,24 @@ async function startServer() {
     const lowerQ = lastUserMsg.toLowerCase();
 
     let fallbackReply = '';
-    if (/\b(tempo|meteorologia|chuva|temperatura|graus|viana|darque|gps)\b/.test(lowerQ)) {
-      fallbackReply = `Neste momento em ${w.locationName} (GPS ${w.latitude.toFixed(4)}, ${w.longitude.toFixed(4)}), estão ${w.temperatureC}°C com sensação térmica de ${w.apparentTemperatureC}°C e céu ${w.conditionText.toLowerCase()}. A humidade está nos ${w.humidityPercent}% e o vento sopra a ${w.windSpeedKmh} km/h.`;
+    if (/\b(moe|modelo|3060|vram|algoritmo|otimiza|qwen|raciocínio|raciocinio)\b/.test(lowerQ)) {
+      fallbackReply = `Olha, Dinis, para a tua RTX 3060 Ti de 8 GB com o Ryzen 7 5800X, o segredo é descer o parâmetro n-cpu-moe de 35 para 26 usando o modelo Qwen3-30B-A3B-Instruct-2507. Assim manténs 22 camadas de peritos MoE diretamente nos 448 GB/s da gráfica, ficas com 7.45 GB de VRAM ocupada em segurança e passas para mais de 42 tokens por segundo com resposta vocal imediata.`;
+    } else if (/\b(tempo|meteorologia|chuva|temperatura|graus|viana|darque|gps)\b/.test(lowerQ)) {
+      fallbackReply = `Olha, Dinis, estive a ver agora mesmo: aqui em ${w.locationName} estão ${w.temperatureC}°C, com sensação de ${w.apparentTemperatureC}°C e céu ${w.conditionText.toLowerCase()}. A humidade anda nos ${w.humidityPercent}% e corre uma brisa de ${w.windSpeedKmh} km/h.`;
     } else if (/\b(router|rede|internet|tráfego|trafego|velocidade|mbps|ping|ip)\b/.test(lowerQ)) {
-      fallbackReply = `O teu router principal (${net.gatewayIp}) está ligado à fibra com latência de ${net.pingMs} ms e 0% de perda de pacotes. O tráfego em tempo real é de ${net.downloadMbps} Mbps de download e ${net.uploadMbps} Mbps de upload, com ${net.connectedDevicesCount} dispositivos ativos na rede e ${net.totalRxGbToday} GB descarregados hoje.`;
+      fallbackReply = `Ora bem, Dinis, o teu router fibra lá de casa está impecável, com apenas ${net.pingMs} ms de ping e zero perda de pacotes. Neste momento estás a puxar ${net.downloadMbps} Mbps de download e ${net.uploadMbps} Mbps de upload, com ${net.connectedDevicesCount} equipamentos ligados.`;
     } else if (/\b(máquinas|maquinas|homelab|servidor|pc|rtx|gpu|ubuntu|portátil|vivobook)\b/.test(lowerQ)) {
-      fallbackReply = `Todas as máquinas lá de casa estão online na malha Tailscale: o Shad3-PC (${shad3?.ip}) está com a RTX 3060 Ti a ${shad3?.tempC}°C (${shad3?.vramUsedMb}/${shad3?.vramTotalMb} MB VRAM) e CPU a ${shad3?.cpuPercent}%; o Ubuntu-Homelab (${ubuntu?.ip} - shad3.dev) está ativo com Docker, Nextcloud e Nginx a consumir ${ubuntu?.ramUsedGb}/${ubuntu?.ramTotalGb} GB de RAM.`;
+      fallbackReply = `Tudo tranquilo no homelab, Dinis: o teu Shad3-PC está com a RTX 3060 Ti fresquinha a ${shad3?.tempC}°C (${shad3?.vramUsedMb} MB de VRAM em uso) e o CPU a ${shad3?.cpuPercent}%. O servidor Ubuntu-Homelab em shad3.dev também está a rolar a 100% com ${ubuntu?.ramUsedGb} GB de RAM ocupados.`;
     } else if (/\b(html|código|codigo|cria|gera|página|pagina|componente|script)\b/.test(lowerQ)) {
-      fallbackReply = `Com certeza, Dinis. Preparei o artefacto interativo com telemetria em tempo real para o teu homelab:\n\n\`\`\`html:Painel_Telemetria_Jarvis\n<!DOCTYPE html>\n<html lang="pt-PT">\n<head>\n<meta charset="UTF-8" />\n<style>\n  body { background: #090d16; color: #f8fafc; font-family: system-ui, sans-serif; padding: 24px; }\n  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }\n  .card { background: #111827; border: 1px solid #1e293b; border-radius: 12px; padding: 16px; }\n  .val { font-size: 1.8rem; font-weight: 700; color: #38bdf8; margin-top: 6px; font-family: monospace; }\n</style>\n</head>\n<body>\n  <h2>J.A.R.V.I.S. Homelab Snapshot</h2>\n  <div class="grid">\n    <div class="card"><div>Meteorologia (${w.locationName})</div><div class="val">${w.temperatureC}°C</div><div>${w.conditionText}</div></div>\n    <div class="card"><div>Tráfego Router (${net.gatewayIp})</div><div class="val">${net.downloadMbps} Mbps</div><div>Ping: ${net.pingMs} ms</div></div>\n    <div class="card"><div>RTX 3060 Ti VRAM</div><div class="val">${shad3?.vramUsedMb} MB</div><div>Temp: ${shad3?.tempC}°C</div></div>\n  </div>\n</body>\n</html>\n\`\`\``;
+      fallbackReply = `Claro que sim, Dinis, já te preparei aqui o código interativo no estúdio ao lado:\n\n\`\`\`html:Painel_Futurista_Jarvis\n<!DOCTYPE html>\n<html lang="pt-PT">\n<head>\n<meta charset="UTF-8" />\n<style>\n  body { background: #030711; color: #f8fafc; font-family: system-ui, sans-serif; padding: 24px; }\n  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }\n  .card { background: #071022; border: 1px solid rgba(56,189,248,0.3); border-radius: 12px; padding: 16px; }\n  .val { font-size: 1.8rem; font-weight: 700; color: #38bdf8; margin-top: 6px; font-family: monospace; }\n</style>\n</head>\n<body>\n  <h2>J.A.R.V.I.S. Telemetria & RTX 3060 Ti</h2>\n  <div class="grid">\n    <div class="card"><div>Meteorologia (${w.locationName})</div><div class="val">${w.temperatureC}°C</div><div>${w.conditionText}</div></div>\n    <div class="card"><div>Router Fibra (${net.gatewayIp})</div><div class="val">${net.downloadMbps} Mbps</div><div>Ping: ${net.pingMs} ms</div></div>\n    <div class="card"><div>RTX 3060 Ti (${selectedModel})</div><div class="val">${shad3?.vramUsedMb} MB</div><div>Temp: ${shad3?.tempC}°C</div></div>\n  </div>\n</body>\n</html>\n\`\`\``;
     } else {
-      fallbackReply = `Entendido, Dinis. Registei o teu pedido. Neste momento em ${w.locationName} estão ${w.temperatureC}°C (${w.conditionText.toLowerCase()}), o router está a debitar ${net.downloadMbps} Mbps ↓ / ${net.uploadMbps} Mbps ↑ (${net.pingMs} ms ping) e o Shad3-PC com a RTX 3060 Ti está a ${shad3?.tempC}°C. Como queres prosseguir?`;
+      fallbackReply = `Olha, Dinis, cá estou eu! Neste momento em ${w.locationName} estão ${w.temperatureC}°C, o router fibra está a debitar ${net.downloadMbps} Mbps com ${net.pingMs} ms de ping, e a tua RTX 3060 Ti está a ${shad3?.tempC}°C pronta para acelerar com o motor ${selectedModel}. Diz-me lá, o que precisas que faça agora?`;
     }
 
     const words = fallbackReply.split(' ');
     for (let i = 0; i < words.length; i++) {
       sendSseToken((i === 0 ? '' : ' ') + words[i]);
-      await new Promise((r) => setTimeout(r, 18));
+      await new Promise((r) => setTimeout(r, isVoiceMode ? 8 : 14));
     }
     res.write('data: [DONE]\n\n');
     res.end();

@@ -1,7 +1,20 @@
 import React from 'react';
-import { Mic, MicOff, Volume2, Square, Sparkles, CloudSun, Wifi, Server, Brain } from 'lucide-react';
+import {
+  Mic,
+  MicOff,
+  Volume2,
+  Square,
+  Sparkles,
+  CloudSun,
+  Wifi,
+  Server,
+  Brain,
+  Zap,
+  Cpu
+} from 'lucide-react';
 import { FluidVoiceOrb, JarvisVoiceState } from './FluidVoiceOrb';
 import { FullSystemTelemetry } from '../utils/jarvisLogic';
+import { ReasoningMode, RtxModelProfile } from '../utils/rtxOptimizer';
 
 interface ChatGptVoiceViewProps {
   jarvisState: JarvisVoiceState;
@@ -22,6 +35,11 @@ interface ChatGptVoiceViewProps {
   onQuickVoicePrompt: (prompt: string) => void;
   telemetry: FullSystemTelemetry | null;
   memoryFactsCount: number;
+  activeModel: RtxModelProfile;
+  reasoningMode: ReasoningMode;
+  onChangeReasoningMode: (mode: ReasoningMode) => void;
+  onOpenRtxStudio: () => void;
+  voiceLatencyMs: number;
 }
 
 export const ChatGptVoiceView: React.FC<ChatGptVoiceViewProps> = ({
@@ -42,146 +60,216 @@ export const ChatGptVoiceView: React.FC<ChatGptVoiceViewProps> = ({
   onStopAudio,
   onQuickVoicePrompt,
   telemetry,
-  memoryFactsCount
+  memoryFactsCount,
+  activeModel,
+  reasoningMode,
+  onChangeReasoningMode,
+  onOpenRtxStudio,
+  voiceLatencyMs
 }) => {
   const stateLabel: Record<JarvisVoiceState, string> = {
-    IDLE: 'Pronto para Ouvir (Modo Toque)',
-    LISTENING: 'Escuta Ativa Hands-Free — Fala naturalmente',
-    RECORDING: 'A Captar a tua Voz em Tempo Real...',
-    PROCESSING: 'A Processar Contexto & Telemetria...',
-    SPEAKING: 'J.A.R.V.I.S. a Responder (Toca na Esfera ou Espaço para interromper)'
+    IDLE: 'Pronto para Ouvir · Modo Voz Direto Ultra-Rápido',
+    LISTENING: 'Escuta Ativa Hands-Free — Fala naturalmente como com um amigo',
+    RECORDING: 'A Ouvir a Tua Voz em Tempo Real (48 kHz)...',
+    PROCESSING: 'Resposta Rápida em Curso (Micro-Clause Streaming)...',
+    SPEAKING: 'J.A.R.V.I.S. a Conversar Contigo (Toca na Esfera ou Espaço para interromper)'
   };
 
   const quickVoicePrompts = [
-    'Como está o tempo agora em Viana do Castelo e a previsão?',
-    'Qual é o tráfego atual do router lá de casa e o ping?',
-    'Como estão as máquinas do Homelab e a temperatura da RTX 3060 Ti?',
-    'Lembra-te que a entrega do projeto AppRAN é na próxima sexta-feira.'
+    'Olha Jarvis, como está o tempo agora em Viana do Castelo?',
+    'Diz-me rápido como está o tráfego do router lá de casa e o ping.',
+    'Como estão as temperaturas da minha RTX 3060 Ti e do Shad3-PC?',
+    'Qual é o melhor modelo MoE para correr agora na minha RTX 3060 Ti?'
   ];
 
   return (
-    <div className="flex-1 flex flex-col justify-between overflow-y-auto px-6 py-6 bg-gradient-to-b from-slate-950 via-[#070d19] to-slate-950">
-      {/* Top Voice Controls Strip */}
-      <div className="max-w-5xl w-full mx-auto flex flex-wrap items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-100 tracking-tight">
-            Modo de Voz Pessoal em Tempo Real
-          </h1>
-          <p className="text-xs text-slate-400">
-            Conversação full-duplex com interrupção imediata (Barge-In) · Memória Instantânea · Sensores Domésticos
+    <div className="flex-1 flex flex-col justify-between overflow-y-auto px-4 sm:px-6 py-4 sm:py-6 futuristic-grid-bg relative">
+      {/* Top Voice & RTX 3060 Ti Low-Latency Controls Strip */}
+      <div className="max-w-5xl w-full mx-auto flex flex-wrap items-center justify-between gap-3 border-b border-sky-500/20 pb-3.5 z-10">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-base sm:text-lg font-bold text-slate-100 tracking-tight font-display">
+              Modo Voz Direto · Conversação Humana Ultra-Rápida
+            </h1>
+            <span className="px-2 py-0.5 rounded bg-sky-500/15 border border-sky-400/40 text-[11px] font-mono text-sky-300 tabular-nums">
+              TTFA ~{voiceLatencyMs}ms
+            </span>
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Prosódia natural PT-PT com streaming à primeira vírgula · Motor:{' '}
+            <button
+              type="button"
+              onClick={onOpenRtxStudio}
+              className="text-sky-400 hover:underline font-medium cursor-pointer"
+            >
+              {activeModel.name} ({activeModel.voiceTokPerSec} tok/s)
+            </button>
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-xs text-slate-300 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Quick Reasoning Mode Selector for Instant Voice vs Deep CoT */}
+          <div className="flex items-center bg-[#040915] border border-sky-500/25 rounded-lg p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => onChangeReasoningMode('voice_instant')}
+              className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+                reasoningMode === 'voice_instant'
+                  ? 'bg-sky-500 text-slate-950 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Salta a cadeia longa de pensamento (/no_think) para resposta vocal imediata"
+            >
+              <Zap className="w-3 h-3" />
+              Voz Instantânea
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeReasoningMode('hybrid_smart')}
+              className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                reasoningMode === 'hybrid_smart'
+                  ? 'bg-sky-500 text-slate-950 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Híbrido
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeReasoningMode('deep_reasoning')}
+              className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                reasoningMode === 'deep_reasoning'
+                  ? 'bg-sky-500 text-slate-950 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Profundo (CoT)
+            </button>
+          </div>
+
+          <label className="flex items-center gap-1.5 text-xs text-slate-300 bg-[#050b18] border border-sky-500/25 rounded-lg px-2.5 py-1.5">
             <Volume2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-            <span className="text-slate-400">Voz:</span>
             <select
               aria-label="Selecionar voz do assistente"
               value={voice}
               onChange={(e) => setVoice(e.target.value)}
               className="bg-transparent text-slate-100 font-medium focus:outline-none cursor-pointer"
             >
-              <option value="duarte" className="bg-slate-900">Duarte (Neural PT-PT)</option>
-              <option value="raquel" className="bg-slate-900">Raquel / Friday (Neural PT-PT)</option>
-              <option value="piper" className="bg-slate-900">Piper (Estúdio Offline)</option>
+              <option value="duarte" className="bg-slate-950">Duarte (Natural PT-PT)</option>
+              <option value="raquel" className="bg-slate-950">Raquel / Friday (Natural PT-PT)</option>
+              <option value="piper" className="bg-slate-950">Piper (Offline RTX)</option>
             </select>
           </label>
 
-          <label className="flex items-center gap-2 text-xs text-slate-300 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5">
-            <span className="text-slate-400">Cadência:</span>
+          <label className="flex items-center gap-1.5 text-xs text-slate-300 bg-[#050b18] border border-sky-500/25 rounded-lg px-2.5 py-1.5">
+            <span className="text-slate-400">Ritmo:</span>
             <select
               aria-label="Velocidade da voz"
               value={speed}
               onChange={(e) => setSpeed(Number(e.target.value))}
               className="bg-transparent text-slate-100 font-mono focus:outline-none cursor-pointer"
             >
-              <option value={1.0} className="bg-slate-900">1.00x</option>
-              <option value={1.08} className="bg-slate-900">1.08x</option>
-              <option value={1.15} className="bg-slate-900">1.15x</option>
+              <option value={1.0} className="bg-slate-950">1.00x</option>
+              <option value={1.06} className="bg-slate-950">1.06x (Humano)</option>
+              <option value={1.12} className="bg-slate-950">1.12x (Rápido)</option>
+              <option value={1.18} className="bg-slate-950">1.18x (Turbo)</option>
             </select>
           </label>
 
           <button
             type="button"
             onClick={() => setAutoVadMode(!autoVadMode)}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
               autoVadMode
-                ? 'bg-sky-500/15 border-sky-500/50 text-sky-300'
-                : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
+                ? 'bg-sky-500/20 border-sky-400/50 text-sky-300'
+                : 'bg-[#050b18] border-slate-800 text-slate-300 hover:text-white'
             }`}
           >
             {autoVadMode ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
-            {autoVadMode ? 'Deteção Automática (VAD)' : 'Premir para Falar (PTT)'}
+            {autoVadMode ? 'Escuta Contínua (VAD)' : 'Toque (PTT)'}
           </button>
         </div>
       </div>
 
-      {/* Central Fluid Voice Orb & Live Captions */}
-      <div className="my-auto py-6 flex flex-col items-center justify-center text-center max-w-2xl mx-auto w-full">
-        <div className="relative flex items-center justify-center">
+      {/* Central Futuristic Blue & Black Animated Orb + Live Captions */}
+      <div className="my-auto py-4 sm:py-6 flex flex-col items-center justify-center text-center max-w-2xl mx-auto w-full z-10">
+        <div className="relative flex items-center justify-center my-2">
+          {/* GPU-Composited Concentric Futuristic Blue Rings */}
+          <div className="pointer-events-none absolute w-[260px] h-[260px] sm:w-[300px] sm:h-[300px] rounded-full border border-sky-500/20 border-dashed animate-orbital-slow" />
+          <div className="pointer-events-none absolute w-[230px] h-[230px] sm:w-[264px] sm:h-[264px] rounded-full border border-blue-500/25 animate-orbital-reverse" />
+          <div className="pointer-events-none absolute w-[190px] h-[190px] sm:w-[220px] sm:h-[220px] rounded-full bg-sky-500/10 blur-2xl animate-aura-pulse" />
+
           <FluidVoiceOrb
             state={jarvisState}
             analyserRef={analyserRef}
-            size={240}
+            size={236}
             onClick={onOrbClick}
             ariaLabel="Esfera de voz interativa J.A.R.V.I.S. — Toca para falar ou interromper"
           />
         </div>
 
-        <div className="mt-4 space-y-2">
-          <div className="text-sm font-medium text-sky-400 tracking-wide">
+        <div className="mt-3 space-y-1">
+          <div className="text-sm font-semibold text-sky-400 tracking-wide">
             {stateLabel[jarvisState]}
           </div>
           <p className="text-xs text-slate-400 font-mono">{statusText}</p>
         </div>
 
-        {/* Live Transcript / Subtitle Box */}
-        <div className="mt-6 w-full min-h-[92px] rounded-xl bg-slate-900/70 border border-slate-800/90 p-4 flex flex-col justify-center gap-2">
+        {/* Live Transcript / Human Spoken Subtitle Box */}
+        <div className="mt-4 w-full min-h-[88px] rounded-xl futuristic-card p-4 flex flex-col justify-center gap-2">
           {liveTranscript ? (
-            <div className="text-sm text-amber-300 font-medium">
+            <div className="text-sm text-sky-300 font-medium">
               “{liveTranscript}”
             </div>
           ) : null}
           {lastAssistantReply ? (
-            <p className="text-sm text-slate-200 leading-relaxed line-clamp-3">
-              {lastAssistantReply.replace(/```[\s\S]*?```/g, '[Artefacto de Código Gerado]').trim()}
+            <p className="text-sm text-slate-100 leading-relaxed line-clamp-3">
+              {lastAssistantReply.replace(/```[\s\S]*?```/g, '[Artefacto de Código no Estúdio]').trim()}
             </p>
           ) : (
             <p className="text-xs text-slate-400">
-              Toca na esfera luminosa ou fala diretamente para perguntar pelo tempo, GPS, tráfego do router, estado do Shad3-PC ou guardar notas na memória instantânea.
+              Toca na esfera azul ou fala diretamente. O J.A.R.V.I.S. responde com tom natural português e começa a falar na primeira vírgula sem esperares pelo fim do texto.
             </p>
           )}
         </div>
 
         {/* Action Buttons Row */}
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
           <button
             type="button"
             onClick={onOrbClick}
-            className="px-5 py-2.5 rounded-lg bg-sky-400 hover:bg-sky-300 text-slate-950 font-semibold text-xs transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
+            className="px-5 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-950 font-bold text-xs transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 futuristic-blue-glow"
           >
             <Mic className="w-4 h-4" />
             {jarvisState === 'RECORDING'
-              ? 'Concluir e Enviar Frase'
+              ? 'Enviar Agora e Ouvir Resposta'
               : jarvisState === 'SPEAKING'
               ? 'Interromper e Falar Agora'
-              : 'Falar Agora com o J.A.R.V.I.S.'}
+              : 'Conversar por Voz Agora'}
           </button>
 
           {jarvisState === 'SPEAKING' && (
             <button
               type="button"
               onClick={onStopAudio}
-              className="px-4 py-2.5 rounded-lg bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30 font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+              className="px-4 py-2.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30 font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
             >
               <Square className="w-3.5 h-3.5" />
               Calar Voz (Espaço)
             </button>
           )}
 
-          <label className="flex items-center gap-2 text-xs text-slate-400 px-3 py-2 bg-slate-900/60 border border-slate-800 rounded-lg">
-            <span>Sensibilidade VAD ({threshold}%):</span>
+          <button
+            type="button"
+            onClick={onOpenRtxStudio}
+            className="px-3.5 py-2.5 rounded-xl bg-[#050b18] hover:bg-slate-900 border border-sky-500/30 text-sky-300 font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Cpu className="w-3.5 h-3.5 text-sky-400" />
+            Configurar RTX 3060 Ti
+          </button>
+
+          <label className="flex items-center gap-2 text-xs text-slate-400 px-3 py-2 bg-[#050b18] border border-sky-500/20 rounded-xl">
+            <span>VAD ({threshold}%):</span>
             <input
               type="range"
               min={4}
@@ -193,11 +281,11 @@ export const ChatGptVoiceView: React.FC<ChatGptVoiceViewProps> = ({
           </label>
         </div>
 
-        {/* Quick Voice Simulation / Direct Prompts */}
-        <div className="mt-6 w-full">
-          <div className="text-xs text-slate-400 mb-2.5 flex items-center justify-center gap-1.5">
+        {/* Quick Voice Simulation / Direct Spoken Prompts */}
+        <div className="mt-5 w-full">
+          <div className="text-xs text-slate-400 mb-2 flex items-center justify-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-            <span>Comandos Rápidos de Voz & Telemetria (Testar Resposta Falada):</span>
+            <span>Testar Resposta Humana Ultra-Rápida em Voz (Clica para ouvir):</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-left">
             {quickVoicePrompts.map((q, i) => (
@@ -205,7 +293,7 @@ export const ChatGptVoiceView: React.FC<ChatGptVoiceViewProps> = ({
                 key={i}
                 type="button"
                 onClick={() => onQuickVoicePrompt(q)}
-                className="px-3.5 py-2.5 rounded-lg bg-slate-900/75 hover:bg-slate-800/90 border border-slate-800 hover:border-slate-700 text-xs text-slate-200 transition-colors cursor-pointer truncate"
+                className="px-3.5 py-2.5 rounded-xl futuristic-card hover:border-sky-400/50 text-xs text-slate-200 transition-all cursor-pointer truncate"
               >
                 “{q}”
               </button>
@@ -215,56 +303,54 @@ export const ChatGptVoiceView: React.FC<ChatGptVoiceViewProps> = ({
       </div>
 
       {/* Bottom Live Sensors Context Strip */}
-      <div className="max-w-5xl w-full mx-auto pt-4 border-t border-slate-800/80 grid grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
-        <div className="flex items-center gap-3 text-slate-300">
+      <div className="max-w-5xl w-full mx-auto pt-3.5 border-t border-sky-500/20 grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs z-10">
+        <div className="flex items-center gap-2.5 text-slate-300">
           <CloudSun className="w-4 h-4 text-sky-400 shrink-0" />
           <div className="truncate">
-            <span className="text-slate-400">Tempo/GPS: </span>
-            <span className="font-mono text-slate-100">
+            <span className="text-slate-400">Viana GPS: </span>
+            <span className="font-mono text-slate-100 tabular-nums">
               {telemetry ? `${telemetry.weather.temperatureC}°C` : '16.5°C'}
             </span>
             <span className="text-slate-500"> · </span>
             <span className="text-slate-300">
-              {telemetry ? telemetry.weather.conditionText : 'Darque, Viana'}
+              {telemetry ? telemetry.weather.conditionText : 'Darque'}
             </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-slate-300">
-          <Wifi className="w-4 h-4 text-emerald-400 shrink-0" />
+        <div className="flex items-center gap-2.5 text-slate-300">
+          <Wifi className="w-4 h-4 text-sky-400 shrink-0" />
           <div className="truncate">
-            <span className="text-slate-400">Router Fibra: </span>
-            <span className="font-mono text-slate-100">
+            <span className="text-slate-400">Router: </span>
+            <span className="font-mono text-slate-100 tabular-nums">
               {telemetry ? `${telemetry.network.downloadMbps} Mbps ↓` : '142 Mbps ↓'}
             </span>
             <span className="text-slate-500"> · </span>
-            <span className="font-mono text-slate-300">
+            <span className="font-mono text-sky-300 tabular-nums">
               {telemetry ? `${telemetry.network.pingMs}ms` : '7ms'}
             </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-slate-300">
+        <div className="flex items-center gap-2.5 text-slate-300">
           <Server className="w-4 h-4 text-sky-400 shrink-0" />
           <div className="truncate">
-            <span className="text-slate-400">Homelab: </span>
-            <span className="font-mono text-slate-100">
-              {telemetry
-                ? `${telemetry.machines.filter((m) => m.status === 'online').length}/${telemetry.machines.length} Máquinas`
-                : '4/4 Máquinas'}
+            <span className="text-slate-400">RTX 3060 Ti: </span>
+            <span className="font-mono text-slate-100 tabular-nums">
+              {telemetry?.machines?.[0]
+                ? `${telemetry.machines[0].vramUsedMb}MB · ${telemetry.machines[0].tempC}°C`
+                : '5840MB · 54°C'}
             </span>
-            <span className="text-slate-500"> · </span>
-            <span className="text-slate-300">Tailscale OK</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-slate-300">
-          <Brain className="w-4 h-4 text-amber-400 shrink-0" />
+        <div className="flex items-center gap-2.5 text-slate-300">
+          <Brain className="w-4 h-4 text-sky-400 shrink-0" />
           <div className="truncate">
-            <span className="text-slate-400">Memória Instantânea: </span>
-            <span className="font-mono text-slate-100">{memoryFactsCount} factos</span>
+            <span className="text-slate-400">Memória: </span>
+            <span className="font-mono text-slate-100 tabular-nums">{memoryFactsCount} factos</span>
             <span className="text-slate-500"> · </span>
-            <span className="text-slate-300">Zero-Latency</span>
+            <span className="text-sky-300">Ativa</span>
           </div>
         </div>
       </div>
