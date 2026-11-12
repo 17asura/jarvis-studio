@@ -431,6 +431,22 @@ async def system_stats():
     gpu_info, ram_info, *_ = read_hw_stats()
     return {"gpu": gpu_info, "ram": ram_info}
 
+@app.get("/logs/llama")
+async def get_llama_logs():
+    log_path = "/tmp/jarvis-llama-server.log"
+    log_text = ""
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+                log_text = "".join(lines[-60:])
+        except Exception:
+            pass
+    gpu_info, ram_info, *_ = read_hw_stats()
+    if not log_text:
+        log_text = f"[Diagnóstico Local]\n{gpu_info} | {ram_info}\nLog em: {log_path}"
+    return {"status": "ativo", "gpu": gpu_info, "log": log_text}
+
 async def fetch_weather_live():
     global cached_weather, last_weather_ts
     now = time.time()

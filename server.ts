@@ -615,10 +615,39 @@ async function startServer() {
     res.json({ status: 'ok' });
   });
 
-  // 2. ROTAS DE TELEMETRIA, METEOROLOGIA/GPS, ROUTER & HOMELAB
+  // 2. ROTAS DE TELEMETRIA, METEOROLOGIA/GPS, ROUTER, HOMELAB & LOGS LLAMA-SERVER
   app.get('/system_stats', async (_req: Request, res: Response) => {
     const stats = await getDynamicSystemStats();
     res.json({ gpu: stats.gpuSummary, ram: stats.ramSummary });
+  });
+
+  app.get('/logs/llama', async (_req: Request, res: Response) => {
+    const logPath = '/tmp/jarvis-llama-server.log';
+    let logText = '';
+    if (fs.existsSync(logPath)) {
+      try {
+        const content = fs.readFileSync(logPath, 'utf-8');
+        logText = content.split('\n').slice(-60).join('\n');
+      } catch {}
+    }
+    let llamaStatus = 'offline';
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 600);
+      const r = await fetch('http://127.0.0.1:9931/health', { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (r.ok) {
+        llamaStatus = 'online (porta 9931)';
+      } else {
+        llamaStatus = `a carregar / ocupado (HTTP ${r.status})`;
+      }
+    } catch {}
+
+    const stats = await getDynamicSystemStats();
+    if (!logText) {
+      logText = `[Diagnóstico J.A.R.V.I.S.]\nEstado llama-server (127.0.0.1:9931): ${llamaStatus}\n${stats.gpuSummary} | ${stats.ramSummary}\n\nPara ver os logs em tempo real no teu terminal Linux Mint, corre:\n  tail -f /tmp/jarvis-llama-server.log\n\nOu testa manualmente o arranque sem esconder erros:\n  ~/llama.cpp/build/bin/llama-server -m ~/llama.cpp/models/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf --port 9931 -ngl 99 --n-cpu-moe 35 --load-mode none -c 16384 -ctk q8_0 -ctv q8_0 -fa on`;
+    }
+    res.json({ status: llamaStatus, gpu: stats.gpuSummary, log: logText });
   });
 
   app.get('/telemetry/all', async (req: Request, res: Response) => {

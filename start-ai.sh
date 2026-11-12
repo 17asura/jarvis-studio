@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# J.A.R.V.I.S. & Aider — Arranque Inteligente com Proteção Anti-OOM (RTX 3060 Ti 8GB)
+# J.A.R.V.I.S. & Aider — Arranque com Logs em Tempo Real (RTX 3060 Ti 8GB)
 # ==============================================================================
 
 MODEL_PATH="${JARVIS_MODEL:-$HOME/llama.cpp/models/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf}"
@@ -10,10 +10,11 @@ fi
 
 SERVER_BIN="$HOME/llama.cpp/build/bin/llama-server"
 PORT=9931
-LOG_FILE="/tmp/jarvis-llama-aider.log"
+LOG_FILE="/tmp/jarvis-llama-server.log"
+N_CPU_MOE="${JARVIS_CPU_MOE:-35}"
 
 if [ ! -f "$SERVER_BIN" ] || [ ! -f "$MODEL_PATH" ]; then
-    echo "[-] Erro: Binário ou modelo GGUF não encontrado."
+    echo "[-] Erro: Binário ($SERVER_BIN) ou modelo ($MODEL_PATH) não encontrado."
     exit 1
 fi
 
@@ -23,24 +24,15 @@ if ss -tulpn | grep -q ":$PORT"; then
     sleep 1
 fi
 
-FREE_VRAM_MB=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n 1 | tr -d ' ')
-if [ -n "$JARVIS_CPU_MOE" ]; then
-    N_CPU_MOE="$JARVIS_CPU_MOE"
-elif [ -n "$FREE_VRAM_MB" ] && [ "$FREE_VRAM_MB" -ge 7200 ] 2>/dev/null; then
-    N_CPU_MOE=34
-else
-    N_CPU_MOE=35
-fi
-
 while [ "$N_CPU_MOE" -le 44 ]; do
     echo "[*] A iniciar o motor local 30B-A3B na RTX 3060 Ti (--n-cpu-moe $N_CPU_MOE)..."
+    echo "[*] Log em tempo real ($LOG_FILE):"
     : > "$LOG_FILE"
     "$SERVER_BIN" \
         -m "$MODEL_PATH" \
         --host 127.0.0.1 --port "$PORT" \
         -ngl 99 \
         --n-cpu-moe "$N_CPU_MOE" \
-        -t 8 \
         --load-mode none \
         -c 16384 \
         -ctk q8_0 -ctv q8_0 \
@@ -48,26 +40,31 @@ while [ "$N_CPU_MOE" -le 44 ]; do
         --cache-reuse 256 > "$LOG_FILE" 2>&1 &
     SERVER_PID=$!
 
-    echo "[*] A aguardar que o modelo carregue (PID $SERVER_PID — log em $LOG_FILE)..."
+    tail -n +1 -f "$LOG_FILE" &
+    TAIL_PID=$!
+
     CRASHED=0
     while ! curl -s "http://127.0.0.1:$PORT/health" | grep -q "ok"; do
         if ! kill -0 "$SERVER_PID" 2>/dev/null; then
             CRASHED=1
             break
         fi
-        sleep 2
+        sleep 1
     done
+
+    kill "$TAIL_PID" 2>/dev/null
+    wait "$TAIL_PID" 2>/dev/null
 
     if [ "$CRASHED" -eq 0 ]; then
         break
     fi
 
-    echo "[!] Falha ao alocar VRAM com --n-cpu-moe $N_CPU_MOE:"
-    tail -n 5 "$LOG_FILE"
+    echo "[!] O llama-server terminou com erro (--n-cpu-moe $N_CPU_MOE)."
     if grep -qiE "out of memory|cudaMalloc failed|failed to allocate" "$LOG_FILE"; then
         N_CPU_MOE=$((N_CPU_MOE + 1))
-        echo "[*] A ajustar automaticamente para --n-cpu-moe $N_CPU_MOE..."
+        echo "[*] A tentar novamente com --n-cpu-moe $N_CPU_MOE..."
     else
+        echo "[-] Consulta o ficheiro $LOG_FILE para mais detalhes."
         exit 1
     fi
 done

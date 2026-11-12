@@ -40,6 +40,21 @@ export const RtxOptimizerView: React.FC<RtxOptimizerViewProps> = ({
   const [kvType, setKvType] = useState<'q8_0' | 'q4_0' | 'f16'>(activeModel.kvCacheType || 'q8_0');
   const [copiedCmd, setCopiedCmd] = useState(false);
   const [filterArch, setFilterArch] = useState<string>('all');
+  const [llamaLogs, setLlamaLogs] = useState<string>('');
+  const [showLogs, setShowLogs] = useState<boolean>(false);
+
+  const fetchDiagnosticLogs = async () => {
+    setShowLogs(true);
+    try {
+      const r = await fetch('/logs/llama');
+      if (r.ok) {
+        const d = await r.json();
+        setLlamaLogs(d.log || 'Sem logs registados.');
+      }
+    } catch {
+      setLlamaLogs('Corre no terminal: tail -f /tmp/jarvis-llama-server.log');
+    }
+  };
 
   const allocation = calculateRtx3060TiAllocation(
     activeModel,
@@ -317,8 +332,8 @@ export const RtxOptimizerView: React.FC<RtxOptimizerViewProps> = ({
             </div>
           </div>
 
-          {onTestModelPrompt && (
-            <div className="pt-2 border-t border-sky-500/15 flex flex-wrap items-center gap-2">
+          <div className="pt-2 border-t border-sky-500/15 flex flex-wrap items-center gap-2">
+            {onTestModelPrompt && (
               <button
                 type="button"
                 onClick={() =>
@@ -332,6 +347,20 @@ export const RtxOptimizerView: React.FC<RtxOptimizerViewProps> = ({
                 <Play className="w-3.5 h-3.5" />
                 Testar Este Motor em Voz Agora
               </button>
+            )}
+            <button
+              type="button"
+              onClick={fetchDiagnosticLogs}
+              className="py-2 px-3 rounded-xl bg-[#040915] hover:bg-slate-900 border border-sky-500/35 text-sky-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <Terminal className="w-3.5 h-3.5 text-sky-400" />
+              Ver Logs / Diagnóstico
+            </button>
+          </div>
+
+          {showLogs && (
+            <div className="p-3 rounded-xl bg-black/90 border border-sky-500/30 font-mono text-[11px] text-emerald-300 max-h-44 overflow-y-auto whitespace-pre-wrap">
+              {llamaLogs}
             </div>
           )}
         </section>
