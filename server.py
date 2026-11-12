@@ -185,8 +185,15 @@ class CodeRunRequest(BaseModel):
     language: str
     code: str
 
+DIST_DIR = os.path.join(BASE_DIR, "dist")
+if os.path.exists(os.path.join(DIST_DIR, "assets")):
+    app.mount("/assets", StaticFiles(directory=os.path.join(DIST_DIR, "assets")), name="assets")
+
 @app.get("/")
 async def index():
+    dist_index = os.path.join(DIST_DIR, "index.html")
+    if os.path.exists(dist_index):
+        return FileResponse(dist_index)
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
 
 @app.get("/chats")
