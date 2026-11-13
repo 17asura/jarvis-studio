@@ -1179,20 +1179,31 @@ export default function App() {
         })}
 
         {msg.groundingSources && msg.groundingSources.length > 0 && (
-          <div className="pt-2 border-t border-sky-500/20 flex flex-wrap items-center gap-3 text-xs">
-            <span className="text-slate-400">Fontes Web:</span>
-            {msg.groundingSources.map((src, idx) => (
-              <a
-                key={idx}
-                href={src.uri}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sky-400 hover:underline inline-flex items-center gap-1"
-              >
-                <span>{src.title}</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            ))}
+          <div className="pt-2.5 border-t border-sky-500/20 space-y-1.5 text-xs">
+            <div className="text-[11px] font-mono text-emerald-400 flex items-center gap-1.5">
+              <span>✓ Fontes Verificadas Anti-Desinformação ({msg.groundingSources.length}):</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {msg.groundingSources.map((src, idx) => (
+                <a
+                  key={idx}
+                  href={src.uri}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-2.5 py-1 rounded-lg bg-[#030711] hover:bg-slate-900 border border-sky-500/30 text-sky-300 inline-flex items-center gap-1.5 transition-colors"
+                >
+                  {src.trustScore && (
+                    <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] font-bold">
+                      {src.trustScore}%
+                    </span>
+                  )}
+                  <span className="truncate max-w-[240px]">
+                    {src.publisher ? `${src.publisher}: ${src.title}` : src.title}
+                  </span>
+                  <ExternalLink className="w-3 h-3 shrink-0 text-sky-400" />
+                </a>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -1481,23 +1492,26 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() =>
-                      askJarvisLLM('Como está o tempo hoje em Viana do Castelo e nos próximos dias?', false)
+                      askJarvisLLM(
+                        'Quais são as últimas notícias verificadas em Portugal hoje e o que dizem as fontes oficiais?',
+                        false
+                      )
                     }
-                    className="px-3 py-1.5 rounded-lg futuristic-card text-xs text-slate-200 transition-colors cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg futuristic-card text-xs text-sky-300 transition-colors cursor-pointer"
                   >
-                    Meteorologia & GPS em Viana
+                    Notícias Verificadas & Fact-Checking
                   </button>
                   <button
                     type="button"
                     onClick={() =>
                       askJarvisLLM(
-                        'Qual é o tráfego atual do router lá de casa, latência ping e estado das máquinas do homelab?',
+                        'Faz um scan aos dispositivos ligados na rede lá de casa, mostra os MAC addresses e portas abertas.',
                         false
                       )
                     }
                     className="px-3 py-1.5 rounded-lg futuristic-card text-xs text-slate-200 transition-colors cursor-pointer"
                   >
-                    Tráfego do Router & Homelab
+                    Scan Rede & Dispositivos ARP
                   </button>
                   <button
                     type="button"
@@ -1665,7 +1679,7 @@ export default function App() {
           />
         )}
 
-        {/* VIEW 4: COMMAND CENTER (WEATHER/GPS, ROUTER TRAFFIC, HOMELAB MACHINES) */}
+        {/* VIEW 4: COMMAND CENTER (NETWORK SCANNER, FACT-CHECKING, WEATHER/GPS, HOMELAB MACHINES) */}
         {activeNav === 'command' && (
           <CommandCenterView
             telemetry={telemetry}
@@ -1685,6 +1699,19 @@ export default function App() {
                 if (d.telemetry) setTelemetry(d.telemetry);
               }
             }}
+            onScanNetwork={async (targetIp) => {
+              const r = await fetch('/telemetry/network/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targetIp })
+              });
+              if (r.ok) {
+                const d = await r.json();
+                if (d.telemetry) setTelemetry(d.telemetry);
+                return d.message || '';
+              }
+              return '';
+            }}
             onMachineAction={async (machineId, action) => {
               const r = await fetch('/telemetry/homelab/action', {
                 method: 'POST',
@@ -1697,6 +1724,17 @@ export default function App() {
                 return d.message || '';
               }
               return '';
+            }}
+            onVerifyWebTopic={async (query) => {
+              const r = await fetch('/web/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query })
+              });
+              if (r.ok) {
+                return await r.json();
+              }
+              return null;
             }}
             onAskJarvisAbout={(prompt) => {
               setActiveNav('chat');

@@ -8,6 +8,11 @@ import {
   parseMessageSegments,
   parseMemorySections,
   buildSystemPromptWithLiveContext,
+  scoreAndFilterTrustedSources,
+  shouldTriggerWebVerification,
+  lookupMacVendor,
+  parseArpTableOutput,
+  createWakeOnLanPacket,
   DEFAULT_MEMORY_MD
 } from './jarvisLogic';
 import {
@@ -89,6 +94,76 @@ test('calculateRtx3060TiAllocation computes exact 8192MB VRAM budget, OOM protec
   assert.equal(oomAlloc.isOomRisk, true);
 });
 
+test('scoreAndFilterTrustedSources filters fake/clickbait news and scores Tier 1 & Tier 2 publishers', () => {
+  const raw = [
+    {
+      title: 'Boato chocante: vais ficar chocado com esta fofoca!',
+      uri: 'https://fofocas-fake-news.xyz/artigo',
+      snippet: 'Clickbait falso',
+      publisher: 'Fofocas XYZ'
+    },
+    {
+      title: 'Banco de Portugal atualiza previsões económicas para 2026 - RTP Notícias',
+      uri: 'https://www.rtp.pt/noticias/economia/bds-2026',
+      snippet: 'Relatório oficial confirma crescimento do PIB.',
+      publisher: 'RTP Notícias',
+      publishedAt: '12 Nov 2026'
+    },
+    {
+      title: 'Nova arquitetura NVIDIA e avanços em IA - SAPO Tek',
+      uri: 'https://tek.sapo.pt/noticias/computadores/artigo',
+      snippet: 'Análise técnica detalhada.',
+      publisher: 'SAPO Tek'
+    }
+  ];
+
+  const verified = scoreAndFilterTrustedSources(raw);
+  assert.equal(verified.length, 2);
+  assert.equal(verified[0].trustScore, 96);
+  assert.equal(verified[0].trustTier, 'Tier 1 · Oficial / Agência');
+  assert.equal(verified[1].trustScore, 88);
+  assert.equal(verified[1].trustTier, 'Tier 2 · Imprensa Verificada');
+});
+
+test('shouldTriggerWebVerification detects news, person queries, and current facts', () => {
+  assert.equal(shouldTriggerWebVerification('Quais são as últimas notícias sobre Portugal?'), true);
+  assert.equal(shouldTriggerWebVerification('Quem é Cristiano Ronaldo e onde joga atualmente?'), true);
+  assert.equal(shouldTriggerWebVerification('Cria um botão em HTML'), false);
+});
+
+test('parseArpTableOutput and lookupMacVendor parse Linux ARP & ip neigh and resolve OUI vendor', () => {
+  const procArp = `IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         b0:be:76:12:34:56     *        eth0
+192.168.1.35     0x1         0x2         04:42:1a:99:88:77     *        eth0`;
+
+  const ipNeigh = `192.168.1.50 dev wlan0 lladdr c8:3a:6b:aa:bb:cc REACHABLE`;
+
+  const entries = parseArpTableOutput(procArp, ipNeigh);
+  assert.equal(entries.length, 3);
+  assert.equal(entries[0].ip, '192.168.1.1');
+  assert.equal(entries[0].vendor, 'TP-Link Router/Mesh');
+  assert.equal(entries[1].ip, '192.168.1.35');
+  assert.equal(entries[1].vendor, 'ASUS Computer');
+  assert.equal(entries[2].ip, '192.168.1.50');
+  assert.equal(entries[2].vendor, 'Samsung Electronics');
+  assert.equal(lookupMacVendor('3c:7c:3f:11:22:33'), 'ASUS / ASUSTek');
+});
+
+test('createWakeOnLanPacket builds valid 102-byte IEEE 802 Magic Packet', () => {
+  const pkt = createWakeOnLanPacket('04:42:1A:99:88:77');
+  assert.ok(pkt);
+  assert.equal(pkt.length, 102);
+  // First 6 bytes are 0xFF
+  for (let i = 0; i < 6; i++) {
+    assert.equal(pkt[i], 0xff);
+  }
+  // Followed by 16 repetitions of MAC
+  assert.equal(pkt[6], 0x04);
+  assert.equal(pkt[7], 0x42);
+  assert.equal(pkt[8], 0x1a);
+  assert.equal(pkt[101], 0x77);
+});
+
 test('parseMessageSegments extracts text, code artifacts, pdf, and image blocks', () => {
   const sample = `<think>raciocínio interno</think>Claro Dinis, aqui tens o dashboard:\n\`\`\`html:Monitor_Rede\n<html><body>Olá</body></html>\n\`\`\`\nE o relatório:\n\`\`\`pdf:Relatorio_Red\nLinha 1\n\`\`\``;
   const segs = parseMessageSegments('m1', sample);
@@ -109,11 +184,14 @@ test('parseMemorySections parses markdown sections and items accurately', () => 
   assert.ok(sections[0].items.some((item) => item.includes('Dinis')));
 });
 
-test('buildSystemPromptWithLiveContext injects voice mode prosody when active', () => {
+test('buildSystemPromptWithLiveContext injects voice mode prosody and verified web dossier', () => {
   const prompt = buildSystemPromptWithLiveContext('Como está o router?', DEFAULT_MEMORY_MD, null, {
     isVoiceMode: true,
-    selectedModelName: 'Qwen3-8B-Instruct (100% VRAM Resident)'
+    selectedModelName: 'Qwen3-8B-Instruct (100% VRAM Resident)',
+    verifiedWebDossier: '- [RTP Notícias | Confiança: 96%] Notícia verificada'
   });
   assert.ok(prompt.includes('MODO VOZ DIRETO ATIVO'));
   assert.ok(prompt.includes('Dinis Portela Sousa'));
+  assert.ok(prompt.includes('DOSSIER DE FACT-CHECKING & NOTÍCIAS VERIFICADAS'));
+  assert.ok(prompt.includes('RTP Notícias'));
 });
